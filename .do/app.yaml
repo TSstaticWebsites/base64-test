@@ -1,0 +1,39 @@
+name: browser-base64-decoding
+services:
+- name: backend
+  source_dir: /backend
+  github:
+    repo: TSstaticWebsites/base64-test
+    branch: main
+  run_command: uvicorn main:app --host 0.0.0.0 --port $PORT
+  environment_slug: python
+  instance_count: 1
+  instance_size_slug: basic-xxs
+  http_port: 8000
+  envs:
+  - key: PORT
+    value: "8000"
+  routes:
+  - path: /
+    
+- name: frontend
+  source_dir: /frontend
+  github:
+    repo: TSstaticWebsites/base64-test
+    branch: main
+  build_command: npm ci --legacy-peer-deps && npm run build
+  run_command: npm run start
+  environment_slug: node-js
+  instance_count: 1
+  instance_size_slug: basic-xxs
+  http_port: 3000
+  envs:
+  - key: REACT_APP_API_URL
+    value: "${backend.PUBLIC_URL}"
+  routes:
+  - path: /
+
+static_sites: []
+jobs: []
+workers: []
+databases: []
