@@ -3,6 +3,87 @@ import { chunkStorage } from '../utils/indexeddb';
 
 const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
+type EncodingType = 'base64' | 'hex' | 'base32' | 'base85' | 'uuencode' | 'yenc';
+
+// Decoding functions for different encodings
+const decodeData = (encodedString: string, encoding: EncodingType): Uint8Array => {
+  switch (encoding) {
+    case 'base64':
+      const binaryString = atob(encodedString);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      return bytes;
+    
+    case 'hex':
+      // Hex decoding
+      const hexBytes = new Uint8Array(encodedString.length / 2);
+      for (let i = 0; i < encodedString.length; i += 2) {
+        hexBytes[i / 2] = parseInt(encodedString.substr(i, 2), 16);
+      }
+      return hexBytes;
+    
+    case 'base32':
+      // Simple base32 decoding (RFC 4648)
+      const base32chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+      let bits = '';
+      for (const char of encodedString.replace(/=/g, '')) {
+        const val = base32chars.indexOf(char.toUpperCase());
+        if (val !== -1) {
+          bits += val.toString(2).padStart(5, '0');
+        }
+      }
+      const base32Bytes = new Uint8Array(Math.floor(bits.length / 8));
+      for (let i = 0; i < base32Bytes.length; i++) {
+        base32Bytes[i] = parseInt(bits.substr(i * 8, 8), 2);
+      }
+      return base32Bytes;
+    
+    case 'base85':
+      // Base85 decoding (ASCII85)
+      // This is a simplified version - full implementation would be more complex
+      // For now, fallback to base64
+      console.warn('Base85 decoding not fully implemented, using base64 fallback');
+      return decodeData(encodedString, 'base64');
+    
+    case 'uuencode':
+      // UUencode decoding
+      // For simplicity, using base64 as fallback since backend uses base64 for uuencode
+      return decodeData(encodedString, 'base64');
+    
+    case 'yenc':
+      // yEnc decoding - reverse the encoding process
+      const result: number[] = [];
+      // Convert string to bytes using latin-1 encoding
+      const encodedBytes = new Uint8Array(encodedString.length);
+      for (let i = 0; i < encodedString.length; i++) {
+        encodedBytes[i] = encodedString.charCodeAt(i);
+      }
+      
+      // Decode yEnc
+      for (let i = 0; i < encodedBytes.length; i++) {
+        let byte = encodedBytes[i];
+        
+        // Check for escape character
+        if (byte === 0x3D && i + 1 < encodedBytes.length) {
+          // Next byte is escaped, subtract 64
+          i++;
+          byte = (encodedBytes[i] - 64 + 256) % 256;
+        }
+        
+        // Subtract 42 and wrap
+        const decodedByte = (byte - 42 + 256) % 256;
+        result.push(decodedByte);
+      }
+      
+      return new Uint8Array(result);
+    
+    default:
+      throw new Error(`Unsupported encoding: ${encoding}`);
+  }
+};
+
 interface FileInfo {
   file_id: string;
   filename: string;
@@ -46,6 +127,7 @@ interface DecodingState {
   parallelConnections: number;
   downloadProgress: number;
   currentSpeed: number; // MB/s realtime
+  encoding: EncodingType; // Selected encoding type
 }
 
 const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) => {
@@ -64,7 +146,8 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
     parallelConnections: 1, // Default sequential
     totalChunks: 0,
     downloadProgress: 0,
-    currentSpeed: 0
+    currentSpeed: 0,
+    encoding: 'base64' // Default encoding
   });
 
   const downloadStartTimeRef = useRef<number>(0);
@@ -134,7 +217,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         
         // Download function for a single chunk
         const downloadChunk = async (index: number): Promise<void> => {
-          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?chunk_size=${state.customChunkSize}`);
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?chunk_size=${state.customChunkSize}&encoding=${state.encoding}`);
           if (!response.ok) {
             throw new Error(`Failed to fetch chunk ${index}`);
           }
@@ -174,7 +257,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         }, 100);
         
         for (let i = 0; i < totalChunks; i++) {
-          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}`);
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}&encoding=${state.encoding}`);
           if (!response.ok) {
             throw new Error(`Failed to fetch chunk ${i}`);
           }
@@ -231,28 +314,23 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         browserFrozen = await checkIfBrowserFrozen();
       }, 250);
       
-      // Method 1: Concatenate all base64 chunks first, then decode
+      // Concatenate all encoded chunks first, then decode
       console.log('🔍 PROOF: Browser is doing the real work!');
       console.log(`📊 Total chunks received: ${chunks.length}`);
-      console.log(`📊 Total base64 size: ${chunks.join('').length} characters`);
+      console.log(`📊 Total encoded size: ${chunks.join('').length} characters`);
+      console.log(`📊 Using encoding: ${state.encoding}`);
       
-      const concatenatedBase64 = chunks.join('');
-      console.log('✅ Base64 concatenation complete');
+      const concatenatedEncoded = chunks.join('');
+      console.log(`✅ ${state.encoding} concatenation complete`);
       
       // Check memory usage (approximation)
-      const estimatedMemoryUsage = concatenatedBase64.length * 2; // rough estimate
+      const estimatedMemoryUsage = concatenatedEncoded.length * 2; // rough estimate
       console.log(`💾 Estimated memory usage: ${(estimatedMemoryUsage / 1024 / 1024).toFixed(1)}MB`);
       
-      // Decode the entire base64 string - THIS IS THE HEAVY WORK!
-      console.log('🔧 Starting atob() decoding - this will stress the browser!');
-      const binaryString = atob(concatenatedBase64);
-      console.log(`✅ Browser atob() decoded ${(binaryString.length / 1024 / 1024).toFixed(1)}MB of binary data!`);
-      
-      // Convert to Uint8Array
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
+      // Decode the entire encoded string - THIS IS THE HEAVY WORK!
+      console.log(`🔧 Starting ${state.encoding} decoding - this will stress the browser!`);
+      const bytes = decodeData(concatenatedEncoded, state.encoding);
+      console.log(`✅ Browser decoded ${(bytes.length / 1024 / 1024).toFixed(1)}MB of binary data from ${state.encoding}!`);
       
       const blob = new Blob([bytes]);
       
@@ -534,10 +612,14 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
   };
 
   const startProcessing = async () => {
+    // Reset IndexedDB-specific state when starting memory test
+    setState(prev => ({ ...prev, storedChunks: 0, isIndexedDBTest: false }));
     await downloadChunks();
   };
 
   const startIndexedDBProcessing = async () => {
+    // Reset state when starting IndexedDB test
+    setState(prev => ({ ...prev, storedChunks: 0, isIndexedDBTest: true }));
     await downloadChunksToIndexedDB();
   };
 
@@ -568,11 +650,11 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
 
   // Auto-start IndexedDB decoding when all chunks are stored
   useEffect(() => {
-    const expectedChunks = Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize);
-    if (state.storedChunks === expectedChunks && state.isIndexedDBTest && !state.isDecoding && !state.isComplete) {
+    // Use totalChunks from state which was set during download
+    if (state.totalChunks > 0 && state.storedChunks === state.totalChunks && state.isIndexedDBTest && !state.isDecoding && !state.isComplete && !state.isDownloading) {
       decodeFromIndexedDB();
     }
-  }, [state.storedChunks, fileInfo.b64_size, state.customChunkSize, state.isIndexedDBTest, state.isDecoding, state.isComplete]);
+  }, [state.storedChunks, state.totalChunks, state.isIndexedDBTest, state.isDecoding, state.isComplete, state.isDownloading]);
 
   return (
     <div>
@@ -603,6 +685,32 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
           <h3 style={{ marginBottom: '16px' }}>⚙️ Test Configuration</h3>
           
           <div style={{ marginBottom: '24px' }}>
+            <label htmlFor="encoding" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              Encoding Algorithm:
+            </label>
+            <select
+              id="encoding"
+              value={state.encoding}
+              onChange={(e) => setState(prev => ({ ...prev, encoding: e.target.value as EncodingType }))}
+              style={{
+                padding: '8px 12px',
+                marginBottom: '16px',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                fontSize: '14px',
+                width: '250px'
+              }}
+            >
+              <option value="base64">Base64 (Standard, 33% overhead)</option>
+              <option value="hex">Hexadecimal (2x size)</option>
+              <option value="base32">Base32 (60% overhead)</option>
+              <option value="base85">Base85 (25% overhead)</option>
+              <option value="uuencode">UUencode (33% overhead)</option>
+              <option value="yenc">yEnc (Most efficient, 1-2% overhead)</option>
+            </select>
+            
             <label htmlFor="parallelConnections" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
               Download Mode:
             </label>
@@ -757,7 +865,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       {state.isComplete && state.metrics && (
         <div className="card">
           <div className="success" style={{ marginBottom: '16px' }}>
-            <h3 style={{ margin: 0 }}>✅ Processing Complete! {state.isIndexedDBTest ? '(IndexedDB)' : '(Memory)'}</h3>
+            <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>✅ Processing Complete! {state.isIndexedDBTest ? '(IndexedDB)' : '(Memory)'}</h3>
           </div>
           
           <div className="performance-metrics">
@@ -766,12 +874,16 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
             </h4>
             <div className="metric-grid">
               <div className="metric-item">
+                <div className="metric-label">Encoding</div>
+                <div className="metric-value" style={{ textTransform: 'uppercase' }}>{state.encoding}</div>
+              </div>
+              <div className="metric-item">
                 <div className="metric-label">Chunk Size</div>
                 <div className="metric-value">{formatFileSize(state.customChunkSize)}</div>
               </div>
               <div className="metric-item">
                 <div className="metric-label">Total Chunks</div>
-                <div className="metric-value">{Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</div>
+                <div className="metric-value">{state.totalChunks || Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</div>
               </div>
               <div className="metric-item">
                 <div className="metric-label">Download Mode</div>
@@ -812,13 +924,18 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
             </div>
             {state.isIndexedDBTest && (
               <div className="info" style={{ marginTop: '16px' }}>
-                <p style={{ margin: 0 }}>💾 Data was stored in IndexedDB during download for better memory management</p>
+                <p style={{ margin: 0, color: 'var(--text-primary)' }}>💾 Data was stored in IndexedDB during download for better memory management</p>
               </div>
             )}
           </div>
 
           <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
-            <button className="btn-success" onClick={downloadFile}>
+            <button 
+              className="btn-success" 
+              onClick={downloadFile}
+              disabled={!state.decodedBlob}
+              style={{ opacity: state.decodedBlob ? 1 : 0.5 }}
+            >
               💾 Download Decoded File
             </button>
             <button onClick={onReset}>

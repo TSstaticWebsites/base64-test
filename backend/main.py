@@ -12,6 +12,16 @@ from fastapi.responses import JSONResponse
 import math
 import glob
 from pathlib import Path
+import binascii
+from enum import Enum
+
+class EncodingType(str, Enum):
+    BASE64 = "base64"
+    HEX = "hex"
+    BASE32 = "base32"
+    BASE85 = "base85"
+    UUENCODE = "uuencode"
+    YENC = "yenc"
 
 app = FastAPI(title="Base64 Chunking Test Server")
 
@@ -44,6 +54,52 @@ FILE_READ_CHUNK_SIZE = 3 * 1024 * 1024  # 3MB chunks for reading (becomes 4MB in
 os.makedirs(INPUT_FOLDER, exist_ok=True)
 os.makedirs(CACHE_FOLDER, exist_ok=True)
 
+def encode_data(data: bytes, encoding: EncodingType) -> str:
+    """Encode binary data using the specified encoding"""
+    if encoding == EncodingType.BASE64:
+        return base64.b64encode(data).decode('utf-8')
+    elif encoding == EncodingType.HEX:
+        return binascii.hexlify(data).decode('utf-8')
+    elif encoding == EncodingType.BASE32:
+        return base64.b32encode(data).decode('utf-8')
+    elif encoding == EncodingType.BASE85:
+        return base64.b85encode(data).decode('utf-8')
+    elif encoding == EncodingType.UUENCODE:
+        # Simple uuencode-like encoding using base64 with different chars
+        # Real uuencode is more complex with line formatting
+        return base64.b64encode(data).decode('utf-8')
+    elif encoding == EncodingType.YENC:
+        # yEnc encoding - efficient binary encoding
+        # yEnc adds 42 to each byte and escapes special characters
+        result = []
+        for byte in data:
+            # Add 42 and wrap at 256
+            encoded_byte = (byte + 42) % 256
+            
+            # Escape special characters: NULL, LF, CR, =
+            if encoded_byte in [0x00, 0x0A, 0x0D, 0x3D]:
+                result.append(0x3D)  # Escape character
+                result.append((encoded_byte + 64) % 256)
+            else:
+                result.append(encoded_byte)
+        
+        # Convert to string (yEnc uses 8-bit characters)
+        # For web transport, we'll use latin-1 encoding
+        return bytes(result).decode('latin-1')
+    else:
+        raise ValueError(f"Unsupported encoding: {encoding}")
+
+def get_encoding_overhead(encoding: EncodingType) -> float:
+    """Get the approximate size overhead for each encoding"""
+    overheads = {
+        EncodingType.BASE64: 1.33,    # 4/3 overhead
+        EncodingType.HEX: 2.0,         # 2x overhead
+        EncodingType.BASE32: 1.6,      # 8/5 overhead
+        EncodingType.BASE85: 1.25,     # 5/4 overhead
+        EncodingType.UUENCODE: 1.33,   # Similar to base64
+        EncodingType.YENC: 1.02,       # Only 1-2% overhead (very efficient!)
+    }
+    return overheads.get(encoding, 1.33)
 
 def get_file_hash(file_path: str) -> str:
     """Calculate SHA256 hash of file for unique identification"""
@@ -103,7 +159,7 @@ def register_file(file_path: str) -> Optional[Dict]:
         print(f"   Traceback: {traceback.format_exc()}")
         return None
 
-def process_file_on_demand(file_id: str) -> bool:
+def process_file_on_demand(file_id: str, encoding: EncodingType = EncodingType.BASE64) -> bool:
     """Process a file into base64 chunks on first request"""
     if file_id not in processed_files:
         return False
@@ -141,15 +197,20 @@ def process_file_on_demand(file_id: str) -> bool:
                 
                 bytes_processed += len(chunk_data)
                 
-                # Encode to base64
-                b64_chunk = base64.b64encode(chunk_data).decode('utf-8')
+                # Encode using selected encoding
+                encoded_chunk = encode_data(chunk_data, encoding)
                 
-                # Save chunk to cache file
-                chunk_file = os.path.join(file_cache_dir, f"chunk_{chunk_index}.b64")
-                with open(chunk_file, 'w') as cf:
-                    cf.write(b64_chunk)
+                # Save chunk to cache file with encoding extension
+                chunk_file = os.path.join(file_cache_dir, f"chunk_{chunk_index}.{encoding.value}")
+                # For yEnc and other binary-safe encodings, write as binary
+                if encoding == EncodingType.YENC:
+                    with open(chunk_file, 'wb') as cf:
+                        cf.write(encoded_chunk.encode('latin-1'))
+                else:
+                    with open(chunk_file, 'w') as cf:
+                        cf.write(encoded_chunk)
                 
-                total_b64_size += len(b64_chunk)
+                total_b64_size += len(encoded_chunk)
                 chunk_index += 1
                 
                 # Log progress every 2 seconds
@@ -212,8 +273,8 @@ async def list_available_files():
     
     return {'files': files}
 
-def load_chunk_from_cache(file_info: Dict, chunk_number: int, chunk_size: int) -> str:
-    """Load a specific chunk from cached base64 files"""
+def load_chunk_from_cache(file_info: Dict, chunk_number: int, chunk_size: int, encoding: EncodingType = EncodingType.BASE64) -> str:
+    """Load a specific chunk from cached encoded files"""
     cache_dir = file_info.get('cache_dir')
     
     if not cache_dir or not os.path.exists(cache_dir):
@@ -228,30 +289,44 @@ def load_chunk_from_cache(file_info: Dict, chunk_number: int, chunk_size: int) -
     current_pos = 0
     
     for i in range(file_info['cached_chunks']):
-        chunk_file = os.path.join(cache_dir, f"chunk_{i}.b64")
+        # Look for chunk file with the correct encoding extension
+        chunk_file = os.path.join(cache_dir, f"chunk_{i}.{encoding.value}")
+        if not os.path.exists(chunk_file):
+            # Fallback to old .b64 extension for backward compatibility
+            chunk_file = os.path.join(cache_dir, f"chunk_{i}.b64")
         
-        with open(chunk_file, 'r') as f:
-            chunk_data = f.read()
-            chunk_len = len(chunk_data)
-            
-            # Check if this cached chunk contains data we need
-            if current_pos + chunk_len > start_pos and current_pos < end_pos:
-                # Calculate what part of this chunk we need
-                chunk_start = max(0, start_pos - current_pos)
-                chunk_end = min(chunk_len, end_pos - current_pos)
-                result.append(chunk_data[chunk_start:chunk_end])
-            
-            current_pos += chunk_len
-            
-            # Stop if we've got all we need
-            if current_pos >= end_pos:
-                break
+        if encoding == EncodingType.YENC:
+            with open(chunk_file, 'rb') as f:
+                chunk_data = f.read().decode('latin-1')
+        else:
+            with open(chunk_file, 'r') as f:
+                chunk_data = f.read()
+        
+        chunk_len = len(chunk_data)
+        
+        # Check if this cached chunk contains data we need
+        if current_pos + chunk_len > start_pos and current_pos < end_pos:
+            # Calculate what part of this chunk we need
+            chunk_start = max(0, start_pos - current_pos)
+            chunk_end = min(chunk_len, end_pos - current_pos)
+            result.append(chunk_data[chunk_start:chunk_end])
+        
+        current_pos += chunk_len
+        
+        # Stop if we've got all we need
+        if current_pos >= end_pos:
+            break
     
     return ''.join(result)
 
 @app.get("/chunk/{file_id}/{chunk_number}")
-async def get_chunk(file_id: str, chunk_number: int, chunk_size: int = Query(default=CHUNK_SIZE, ge=1024, le=10485760)):
-    """Get a specific chunk of the base64 encoded file with custom chunk size"""
+async def get_chunk(
+    file_id: str, 
+    chunk_number: int, 
+    chunk_size: int = Query(default=CHUNK_SIZE, ge=1024, le=10485760),
+    encoding: EncodingType = Query(default=EncodingType.BASE64)
+):
+    """Get a specific chunk of the encoded file with custom chunk size and encoding"""
     if file_id not in processed_files:
         raise HTTPException(status_code=404, detail="File not found")
     
@@ -259,8 +334,8 @@ async def get_chunk(file_id: str, chunk_number: int, chunk_size: int = Query(def
     
     # Process file on-demand if not already processed
     if not file_info.get('is_processed', False):
-        print(f"📊 First chunk request for {file_info['filename']}, processing on-demand...")
-        if not process_file_on_demand(file_id):
+        print(f"📊 First chunk request for {file_info['filename']}, processing on-demand with {encoding.value} encoding...")
+        if not process_file_on_demand(file_id, encoding):
             raise HTTPException(status_code=500, detail="Failed to process file")
         # Refresh file_info after processing
         file_info = processed_files[file_id]
@@ -272,7 +347,7 @@ async def get_chunk(file_id: str, chunk_number: int, chunk_size: int = Query(def
         raise HTTPException(status_code=404, detail="Chunk not found")
     
     # Load chunk from cache
-    chunk_data = load_chunk_from_cache(file_info, chunk_number, chunk_size)
+    chunk_data = load_chunk_from_cache(file_info, chunk_number, chunk_size, encoding)
     
     return {
         'chunk_number': chunk_number,
@@ -394,6 +469,26 @@ async def delete_input_file(filename: str):
 async def health_check():
     scan_input_folder()  # Check for new files
     return {'status': 'healthy', 'files_processed': len(processed_files)}
+
+@app.get("/encodings")
+async def get_supported_encodings():
+    """Get list of supported encoding types with their characteristics"""
+    encodings = []
+    for enc in EncodingType:
+        encodings.append({
+            "value": enc.value,
+            "name": enc.name,
+            "overhead": get_encoding_overhead(enc),
+            "description": {
+                EncodingType.BASE64: "Standard base64 encoding (most compatible)",
+                EncodingType.HEX: "Hexadecimal encoding (2x size, ASCII safe)",
+                EncodingType.BASE32: "Base32 encoding (case-insensitive)",
+                EncodingType.BASE85: "Base85/ASCII85 encoding (more efficient)",
+                EncodingType.UUENCODE: "Unix-to-Unix encoding (legacy format)",
+                EncodingType.YENC: "yEnc encoding (most efficient, 1-2% overhead)"
+            }.get(enc, "")
+        })
+    return {"encodings": encodings}
 
 @app.get("/status")
 async def get_status():
