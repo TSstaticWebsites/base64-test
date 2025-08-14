@@ -27,8 +27,10 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onFileSelected }) => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const fetchFiles = async () => {
-    setLoading(true);
+  const fetchFiles = async (showLoading = true) => {
+    if (showLoading) {
+      setLoading(true);
+    }
     setError('');
     
     try {
@@ -42,15 +44,17 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onFileSelected }) => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch files');
     } finally {
-      setLoading(false);
+      if (showLoading) {
+        setLoading(false);
+      }
     }
   };
 
   useEffect(() => {
     fetchFiles();
     
-    // Poll for new files every 5 seconds
-    const interval = setInterval(fetchFiles, 5000);
+    // Poll for new files every 5 seconds (without showing loading)
+    const interval = setInterval(() => fetchFiles(false), 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -59,11 +63,11 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onFileSelected }) => {
   };
 
   return (
-    <div className="stats">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-        <h2>Available Files</h2>
-        <button onClick={fetchFiles} disabled={loading}>
-          {loading ? 'Scanning...' : 'Refresh'}
+    <div className="card">
+      <div className="card-header">
+        <h2 style={{ margin: 0 }}>📂 Available Files</h2>
+        <button onClick={() => fetchFiles(true)} disabled={loading}>
+          {loading ? 'Scanning...' : '🔄 Refresh'}
         </button>
       </div>
 
@@ -74,53 +78,66 @@ const FileSelector: React.FC<FileSelectorProps> = ({ onFileSelected }) => {
       )}
 
       {loading ? (
-        <p>Scanning input_files folder...</p>
+        <div style={{ textAlign: 'center', padding: '40px' }}>
+          <div className="spinner" style={{ marginBottom: '16px' }}></div>
+          <p>Scanning input_files folder...</p>
+        </div>
       ) : files.length === 0 ? (
         <div className="upload-area">
-          <h3>No Files Found</h3>
-          <p>Place files in <code>backend/input_files/</code> folder and they will appear here automatically.</p>
-          <p>The backend monitors this folder and processes files into base64 chunks.</p>
-          <button onClick={fetchFiles}>Check Again</button>
+          <h3>📭 No Files Found</h3>
+          <p>Upload files via the File Manager or place them in:</p>
+          <code style={{ fontSize: '1rem' }}>backend/input_files/</code>
+          <p style={{ marginTop: '16px' }}>Files are automatically converted to base64 chunks.</p>
+          <button onClick={() => fetchFiles(true)} style={{ marginTop: '16px' }}>🔄 Check Again</button>
         </div>
       ) : (
-        <div>
-          <p>Found {files.length} processed file{files.length !== 1 ? 's' : ''}:</p>
+        <div className="file-list">
+          <p style={{ marginBottom: '16px' }}>Found {files.length} processed file{files.length !== 1 ? 's' : ''}:</p>
           
           {files.map((file) => (
-            <div key={file.file_id} className="stats" style={{ margin: '10px 0', cursor: 'pointer' }} onClick={() => handleFileSelect(file)}>
-              <h3 style={{ margin: '0 0 10px 0', color: '#007bff' }}>{file.filename}</h3>
+            <div key={file.file_id} className="file-item" onClick={() => handleFileSelect(file)}>
+              <div className="file-item-header">
+                <span className="file-item-title">📄 {file.filename}</span>
+                <span className="metric-value" style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                  {file.total_chunks} chunks
+                </span>
+              </div>
               
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '14px' }}>
-                <div>
-                  <strong>Original Size:</strong> {formatFileSize(file.original_size)}
+              <div className="file-item-stats">
+                <div className="file-item-stat">
+                  <span className="file-item-stat-label">Original Size</span>
+                  <span className="file-item-stat-value">{formatFileSize(file.original_size)}</span>
                 </div>
-                <div>
-                  <strong>Base64 Size:</strong> {formatFileSize(file.b64_size)}
+                <div className="file-item-stat">
+                  <span className="file-item-stat-label">Base64 Size</span>
+                  <span className="file-item-stat-value">{formatFileSize(file.b64_size)}</span>
                 </div>
-                <div>
-                  <strong>Total Chunks:</strong> {file.total_chunks}
+                <div className="file-item-stat">
+                  <span className="file-item-stat-label">Total Chunks</span>
+                  <span className="file-item-stat-value">{file.total_chunks}</span>
                 </div>
-                <div>
-                  <strong>Size Increase:</strong> {((file.b64_size / file.original_size - 1) * 100).toFixed(1)}%
+                <div className="file-item-stat">
+                  <span className="file-item-stat-label">Size Increase</span>
+                  <span className="file-item-stat-value">{((file.b64_size / file.original_size - 1) * 100).toFixed(1)}%</span>
                 </div>
               </div>
               
-              <div style={{ marginTop: '10px', textAlign: 'center' }}>
-                <button onClick={(e) => { e.stopPropagation(); handleFileSelect(file); }}>
-                  Test Decoding Performance →
+              <div style={{ marginTop: '16px', textAlign: 'center' }}>
+                <button className="btn-primary" onClick={(e) => { e.stopPropagation(); handleFileSelect(file); }}>
+                  🚀 Test Decoding Performance
                 </button>
               </div>
             </div>
           ))}
           
-          <div style={{ marginTop: '20px', padding: '15px', backgroundColor: '#f8f9fa', borderRadius: '8px', fontSize: '14px' }}>
-            <h4>Instructions:</h4>
-            <ol>
-              <li>Copy your Big Buck Bunny or other test files to <code>backend/input_files/</code></li>
-              <li>Wait a few seconds for the backend to process them</li>
-              <li>Click "Refresh" if new files don't appear automatically</li>
-              <li>Select a file to test browser decoding performance</li>
-            </ol>
+          <div className="info" style={{ marginTop: '24px' }}>
+            <h4 style={{ marginBottom: '12px', color: 'var(--info)' }}>💡 Quick Tips</h4>
+            <ul style={{ marginLeft: '20px', marginBottom: 0 }}>
+              <li>Use the File Manager to upload test files</li>
+              <li>Files are automatically processed into base64 chunks</li>
+              <li>Click on any file to start performance testing</li>
+              <li>Compare memory-only vs IndexedDB storage modes</li>
+            </ul>
           </div>
         </div>
       )}

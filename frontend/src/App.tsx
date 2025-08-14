@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import FileSelector from './components/FileSelector';
 import ChunkedDecoder from './components/ChunkedDecoder';
+import FileManager from './components/FileManager';
 import { chunkStorage } from './utils/indexeddb';
 
 interface FileInfo {
@@ -11,9 +12,12 @@ interface FileInfo {
   b64_size: number;
 }
 
+type Page = 'test' | 'manager';
+
 function App() {
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null);
   const [isClearing, setIsClearing] = useState(false);
+  const [currentPage, setCurrentPage] = useState<Page>('test');
 
   const handleFileSelected = (info: FileInfo) => {
     setSelectedFile(info);
@@ -44,39 +48,49 @@ function App() {
 
   return (
     <div className="container">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h1>Browser Base64 Decoding Test</h1>
-        <button 
-          onClick={clearIndexedDB}
-          disabled={isClearing}
-          style={{ 
-            backgroundColor: '#dc3545', 
-            color: 'white',
-            fontSize: '14px',
-            padding: '8px 16px'
-          }}
-        >
-          {isClearing ? 'Clearing...' : '🗑️ Clear IndexedDB'}
-        </button>
-      </div>
+      <header className="card-header" style={{ marginBottom: '24px', paddingBottom: '16px', borderBottom: '1px solid var(--border)' }}>
+        <h1 style={{ margin: 0 }}>🧪 Browser Base64 Decoding Test</h1>
+        <div className="nav-buttons">
+          <button
+            className="btn-secondary"
+            onClick={() => setCurrentPage(currentPage === 'test' ? 'manager' : 'test')}
+          >
+            {currentPage === 'test' ? '📁 File Manager' : '🧪 Test Page'}
+          </button>
+          {currentPage === 'test' && (
+            <button 
+              className="btn-danger"
+              onClick={clearIndexedDB}
+              disabled={isClearing}
+            >
+              {isClearing ? 'Clearing...' : '🗑️ Clear IndexedDB'}
+            </button>
+          )}
+        </div>
+      </header>
       
-      <p>
-        <strong>Automatic File Processing:</strong> Put files in <code>backend/input_files/</code> folder.
-        The backend will automatically convert them to base64 chunks.
-      </p>
-      <p>
-        Select a file below to test browser decoding performance and feasibility.
-        <br />
-        <strong>Two test modes:</strong> Memory-only vs IndexedDB storage comparison.
-      </p>
-      
-      {!selectedFile ? (
-        <FileSelector onFileSelected={handleFileSelected} />
+      {currentPage === 'manager' ? (
+        <FileManager />
       ) : (
-        <ChunkedDecoder 
-          fileInfo={selectedFile}
-          onReset={resetApp}
-        />
+        <>
+          <p>
+            <strong>Automatic File Processing:</strong> Files in <code>backend/input_files/</code> folder are automatically converted to base64 chunks.
+          </p>
+          <p>
+            Select a file below to test browser decoding performance and feasibility.
+            <br />
+            <strong>Two test modes:</strong> Memory-only vs IndexedDB storage comparison.
+          </p>
+          
+          {!selectedFile ? (
+            <FileSelector onFileSelected={handleFileSelected} />
+          ) : (
+            <ChunkedDecoder 
+              fileInfo={selectedFile}
+              onReset={resetApp}
+            />
+          )}
+        </>
       )}
     </div>
   );

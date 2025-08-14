@@ -2,20 +2,37 @@
 
 This project tests the feasibility of decoding large files from base64 chunks in the browser. It consists of a Python FastAPI backend that chunks and encodes files, and a React TypeScript frontend that fetches chunks and decodes them.
 
-## Quick Deploy
+## 🚀 Quick Deploy to DigitalOcean
 
 [![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/TSstaticWebsites/base64-test/tree/main)
+
+### One-Click Deployment
+1. Click the button above
+2. Connect your GitHub account if needed
+3. Review the app configuration
+4. Click "Create Resources"
+5. Your app will be live in minutes!
+
+### Manual Deployment
+```bash
+# Using DigitalOcean CLI
+doctl apps create --spec .do/app.yaml
+
+# Or deploy with Docker
+docker build -f Dockerfile.digitalocean -t base64-test .
+docker run -p 80:80 base64-test
+```
 
 ## Architecture
 
 ### Backend (Python FastAPI)
-- Receives file uploads
-- Converts files to base64
-- Chunks the base64 data into 1MB pieces
+- Receives file uploads (simplified, no chunking during upload)
+- Stores files as-is in `/input_files`
+- Processes files to base64 chunks on-demand (when first chunk is requested)
 - Serves chunks via REST API endpoints
 
 ### Frontend (React TypeScript)
-- File upload interface with drag & drop
+- File manager with upload/delete capabilities
 - Fetches chunks sequentially from backend
 - Concatenates and decodes base64 data in browser
 - Performance monitoring and browser freeze detection
@@ -33,29 +50,27 @@ docker-compose up --build
 # Backend API: http://localhost:8000
 ```
 
-### Manual Setup
+### Production Deployment
 
-#### Backend
 ```bash
-cd backend
-pip install -r requirements.txt
-python main.py
+# Build production containers
+docker-compose -f docker-compose.prod.yml up --build
+
+# Application will be available at http://localhost
 ```
 
-#### Frontend
-```bash
-cd frontend
-npm install
-npm start
-```
+## Features
 
-## Testing Different File Sizes
+### File Management
+- **Upload**: Drag & drop or browse to upload files
+- **Delete**: Remove files from storage
+- **Auto-refresh**: File list updates automatically
 
-The application is designed to test browser limits with different file sizes:
-
-- **Small files (1-10MB)**: Should work smoothly
-- **Medium files (10-100MB)**: May show performance impact
-- **Large files (100MB+)**: Tests browser memory limits
+### Testing Capabilities
+- Test browser limits with different file sizes
+- Measure download and decode performance
+- Detect browser freezing
+- Support for files up to 5GB
 
 ## Performance Metrics
 
@@ -69,11 +84,13 @@ The application measures:
 
 ## API Endpoints
 
-- `POST /upload` - Upload a file for processing
-- `GET /chunk/{file_id}/{chunk_number}` - Get a specific chunk
+- `POST /upload-to-input` - Upload a file for storage
+- `GET /files` - List all available files
+- `GET /chunk/{file_id}/{chunk_number}` - Get a specific chunk (triggers processing on first request)
 - `GET /file/{file_id}/info` - Get file information
-- `DELETE /file/{file_id}` - Delete file from memory
+- `DELETE /input-file/{filename}` - Delete file from storage
 - `GET /health` - Health check
+- `GET /status` - Server status and statistics
 
 ## Browser Compatibility
 
@@ -82,39 +99,43 @@ Modern browsers should handle:
 - **Firefox**: 50-100MB files  
 - **Safari**: Varies by device memory
 
-## Limitations & Considerations
+## Configuration
 
-1. **Memory Usage**: Base64 decoding requires keeping data in memory
-2. **Browser Freeze**: Large files may freeze the UI during decoding
-3. **Mobile Devices**: Lower memory limits than desktop
-4. **WebAssembly Alternative**: Consider for better performance with very large files
+### Nginx Settings (Production)
+- Max body size: 5GB
+- Request timeout: 1 hour
+- Buffering disabled for uploads
 
-## When to Use WebAssembly
-
-Consider WebAssembly if:
-- Files exceed 100MB regularly
-- Browser freezing is unacceptable
-- Need better performance on mobile devices
-- Processing complex binary formats
+### Backend Settings
+- Chunk size: 1MB (configurable)
+- On-demand processing
+- File caching system
 
 ## File Structure
 
 ```
 ├── backend/
-│   ├── main.py           # FastAPI application
-│   ├── requirements.txt  # Python dependencies
-│   └── Dockerfile        # Backend container
+│   ├── main.py                 # FastAPI application
+│   ├── requirements.txt        # Python dependencies
+│   ├── Dockerfile              # Development container
+│   ├── Dockerfile.prod         # Production container
+│   └── input_files/            # Uploaded files storage
 ├── frontend/
 │   ├── src/
-│   │   ├── App.tsx                    # Main application
+│   │   ├── App.tsx            # Main application
 │   │   ├── components/
-│   │   │   ├── FileUploader.tsx       # File upload component
-│   │   │   └── ChunkedDecoder.tsx     # Base64 decoding component
-│   │   └── index.tsx                  # React entry point
-│   ├── package.json      # Node.js dependencies
-│   ├── Dockerfile        # Frontend container
-│   └── nginx.conf        # Nginx configuration
-└── docker-compose.yml    # Container orchestration
+│   │   │   ├── FileManager.tsx       # File management UI
+│   │   │   └── ChunkedDecoder.tsx    # Base64 decoding
+│   │   └── index.tsx          # React entry point
+│   ├── Dockerfile             # Development container
+│   ├── Dockerfile.prod        # Production container
+│   ├── nginx.conf             # Development nginx config
+│   └── nginx.prod.conf        # Production nginx config
+├── docker-compose.yml         # Development orchestration
+├── docker-compose.prod.yml    # Production orchestration
+├── Dockerfile.digitalocean    # All-in-one deployment
+└── .do/
+    └── app.yaml              # DigitalOcean app spec
 ```
 
 ## Results Interpretation
@@ -134,6 +155,19 @@ Consider WebAssembly if:
 - Consistent browser freezing
 - Mobile devices fail with smaller files
 
+## Deployment Notes
+
+### DigitalOcean App Platform
+- Uses single container with both frontend and backend
+- Nginx serves frontend and proxies API requests
+- Supervisor manages both processes
+- Automatic SSL and CDN included
+
+### Storage Considerations
+- Files are stored in container filesystem
+- Consider adding persistent storage for production
+- Cache directory for processed base64 chunks
+
 ## Next Steps
 
 Based on test results, you may want to:
@@ -142,4 +176,11 @@ Based on test results, you may want to:
 2. **Add WebAssembly**: For better performance
 3. **Use Web Workers**: Prevent main thread blocking
 4. **Add compression**: Reduce transfer size
-5. **Implement caching**: For repeated access patterns
+5. **Implement persistent storage**: For production use
+
+## Support
+
+For issues or questions:
+- Create an issue on GitHub
+- Check logs: `docker logs base64-test-backend-1`
+- Monitor status: `/status` endpoint

@@ -415,26 +415,38 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
   }, [state.storedChunks, fileInfo.b64_size, state.customChunkSize, state.isIndexedDBTest, state.isDecoding, state.isComplete]);
 
   return (
-    <div className="stats">
-      <h2>File Processing: {fileInfo.filename}</h2>
-      
-      <div className="stats">
-        <h3>File Information</h3>
-        <p>Original Size: {formatFileSize(fileInfo.original_size)}</p>
-        <p>Base64 Size: {formatFileSize(fileInfo.b64_size)}</p>
-        <p>Total Chunks: {fileInfo.total_chunks}</p>
-        <p>Default Chunk Size: {formatFileSize((fileInfo.chunk_size || 1024 * 1024))}</p>
+    <div>
+      <div className="card">
+        <h2 style={{ marginBottom: '16px' }}>📄 {fileInfo.filename}</h2>
+        <div className="metric-grid">
+          <div className="metric-item">
+            <div className="metric-label">Original Size</div>
+            <div className="metric-value">{formatFileSize(fileInfo.original_size)}</div>
+          </div>
+          <div className="metric-item">
+            <div className="metric-label">Base64 Size</div>
+            <div className="metric-value">{formatFileSize(fileInfo.b64_size)}</div>
+          </div>
+          <div className="metric-item">
+            <div className="metric-label">Total Chunks</div>
+            <div className="metric-value">{fileInfo.total_chunks}</div>
+          </div>
+          <div className="metric-item">
+            <div className="metric-label">Default Chunk Size</div>
+            <div className="metric-value">{formatFileSize((fileInfo.chunk_size || 1024 * 1024))}</div>
+          </div>
+        </div>
       </div>
 
       {!state.isDownloading && !state.isDecoding && !state.isComplete && (
-        <div className="stats">
-          <h3>Test Configuration</h3>
+        <div className="card">
+          <h3 style={{ marginBottom: '16px' }}>⚙️ Test Configuration</h3>
           
-          <div style={{ marginBottom: '15px' }}>
-            <label htmlFor="chunkSize" style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-              Custom Chunk Size (bytes):
+          <div style={{ marginBottom: '24px' }}>
+            <label htmlFor="chunkSize" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              Custom Chunk Size:
             </label>
-            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center', marginBottom: '12px' }}>
               <input
                 id="chunkSize"
                 type="number"
@@ -444,87 +456,98 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
                 max="10485760"
                 step="1024"
                 style={{ 
-                  padding: '5px', 
-                  width: '120px',
-                  border: '1px solid #ccc',
-                  borderRadius: '4px'
+                  padding: '8px 12px', 
+                  width: '150px',
+                  background: 'var(--bg-tertiary)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius-sm)',
+                  color: 'var(--text-primary)',
+                  fontSize: '14px'
                 }}
               />
-              <span style={{ fontSize: '14px', color: '#666' }}>
+              <span style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
                 = {formatFileSize(state.customChunkSize)}
               </span>
             </div>
             
-            <div style={{ display: 'flex', gap: '5px', marginBottom: '10px' }}>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
               <button 
                 onClick={() => setState(prev => ({ ...prev, customChunkSize: 64 * 1024 }))}
-                style={{ fontSize: '12px', padding: '3px 8px' }}
+                style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 64KB
               </button>
               <button 
                 onClick={() => setState(prev => ({ ...prev, customChunkSize: 256 * 1024 }))}
-                style={{ fontSize: '12px', padding: '3px 8px' }}
+                style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 256KB
               </button>
               <button 
                 onClick={() => setState(prev => ({ ...prev, customChunkSize: 1024 * 1024 }))}
-                style={{ fontSize: '12px', padding: '3px 8px' }}
+                style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 1MB
               </button>
               <button 
                 onClick={() => setState(prev => ({ ...prev, customChunkSize: 4 * 1024 * 1024 }))}
-                style={{ fontSize: '12px', padding: '3px 8px' }}
+                style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 4MB
               </button>
               <button 
                 onClick={() => setState(prev => ({ ...prev, customChunkSize: 10 * 1024 * 1024 }))}
-                style={{ fontSize: '12px', padding: '3px 8px' }}
+                style={{ fontSize: '12px', padding: '6px 12px' }}
               >
                 10MB
               </button>
             </div>
             
-            <p style={{ fontSize: '14px', color: '#666', margin: '5px 0' }}>
-              Estimated chunks: {Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}
+            <p style={{ fontSize: '14px', color: 'var(--text-muted)' }}>
+              📦 Estimated chunks: <strong style={{ color: 'var(--text-primary)' }}>{Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</strong>
             </p>
           </div>
 
-          <div>
-            <button onClick={startProcessing} style={{ marginRight: '10px' }}>
-              Start Download & Decode Test (Memory)
+          <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <button className="btn-primary" onClick={startProcessing}>
+              🧪 Start Memory Test
             </button>
-            <button onClick={startIndexedDBProcessing}>
-              Start Download & Decode Test (IndexedDB)
+            <button className="btn-secondary" onClick={startIndexedDBProcessing}>
+              💾 Start IndexedDB Test
             </button>
           </div>
         </div>
       )}
 
       {state.isDownloading && (
-        <div className="progress-container">
-          <h3>{state.isIndexedDBTest ? 'Downloading Chunks to IndexedDB...' : 'Downloading Chunks to Memory...'}</h3>
+        <div className="card">
+          <h3 style={{ marginBottom: '16px' }}>
+            {state.isIndexedDBTest ? '💾 Downloading to IndexedDB...' : '🧪 Downloading to Memory...'}
+          </h3>
           <div className="progress-bar">
             <div 
               className="progress-fill" 
               style={{ width: `${(state.currentChunk / Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)) * 100}%` }}
             />
           </div>
-          <p>{state.currentChunk} / {Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)} chunks downloaded</p>
-          <p>Chunk size: {formatFileSize(state.customChunkSize)}</p>
-          {state.isIndexedDBTest && (
-            <p>📦 Stored in IndexedDB: {state.storedChunks} chunks</p>
-          )}
+          <div style={{ marginTop: '12px', color: 'var(--text-secondary)' }}>
+            <p>📦 Progress: <strong>{state.currentChunk}</strong> / <strong>{Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</strong> chunks</p>
+            <p>📊 Chunk size: <strong>{formatFileSize(state.customChunkSize)}</strong></p>
+            {state.isIndexedDBTest && (
+              <p>💾 Stored: <strong>{state.storedChunks}</strong> chunks in IndexedDB</p>
+            )}
+          </div>
         </div>
       )}
 
       {state.isDecoding && (
-        <div className="progress-container">
-          <h3>{state.isIndexedDBTest ? 'Decoding Base64 Data from IndexedDB...' : 'Decoding Base64 Data from Memory...'}</h3>
-          <p>{state.isIndexedDBTest ? 'Loading chunks from IndexedDB and converting to binary...' : 'Converting base64 to binary data...'}</p>
+        <div className="card">
+          <h3 style={{ marginBottom: '16px' }}>
+            {state.isIndexedDBTest ? '🔄 Decoding from IndexedDB...' : '🔄 Decoding from Memory...'}
+          </h3>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '16px' }}>
+            {state.isIndexedDBTest ? 'Loading chunks from IndexedDB and converting to binary...' : 'Converting base64 to binary data...'}
+          </p>
           <div className="progress-bar">
             <div className="progress-fill" style={{ width: '50%' }} />
           </div>
@@ -538,46 +561,66 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       )}
 
       {state.isComplete && state.metrics && (
-        <div className="success">
-          <h3>✅ Processing Complete! {state.isIndexedDBTest ? '(IndexedDB)' : '(Memory)'}</h3>
+        <div className="card">
+          <div className="success" style={{ marginBottom: '16px' }}>
+            <h3 style={{ margin: 0 }}>✅ Processing Complete! {state.isIndexedDBTest ? '(IndexedDB)' : '(Memory)'}</h3>
+          </div>
           
           <div className="performance-metrics">
-            <h4>Performance Metrics {state.isIndexedDBTest ? '- IndexedDB Test' : '- Memory Test'}</h4>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px' }}>
-              <div>
-                <p><strong>Chunk Configuration:</strong></p>
-                <p>Chunk Size: {formatFileSize(state.customChunkSize)}</p>
-                <p>Total Chunks: {Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</p>
-                <p>vs Default: {fileInfo.total_chunks} chunks</p>
+            <h4 style={{ marginBottom: '16px', color: 'var(--text-primary)' }}>
+              📊 Performance Metrics {state.isIndexedDBTest ? '- IndexedDB Test' : '- Memory Test'}
+            </h4>
+            <div className="metric-grid">
+              <div className="metric-item">
+                <div className="metric-label">Chunk Size</div>
+                <div className="metric-value">{formatFileSize(state.customChunkSize)}</div>
               </div>
-              <div>
-                <p><strong>Performance:</strong></p>
-                <p>Download Time: {(state.metrics.downloadTime / 1000).toFixed(2)}s</p>
-                <p>Decode Time: {(state.metrics.decodeTime / 1000).toFixed(2)}s</p>
-                <p>Total Time: {(state.metrics.totalTime / 1000).toFixed(2)}s</p>
+              <div className="metric-item">
+                <div className="metric-label">Total Chunks</div>
+                <div className="metric-value">{Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</div>
               </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
-              <div>
-                <p>Chunks/Second: {state.metrics.chunksPerSecond.toFixed(1)}</p>
-                <p>Decoding Speed: {state.metrics.decodingSpeed.toFixed(2)} MB/s</p>
+              <div className="metric-item">
+                <div className="metric-label">Download Time</div>
+                <div className="metric-value">{(state.metrics.downloadTime / 1000).toFixed(2)}s</div>
               </div>
-              <div>
-                <p>Memory Usage: {formatFileSize(state.metrics.memoryUsage)}</p>
-                <p>Browser Frozen: {state.metrics.browserFrozen ? '❌ Yes' : '✅ No'}</p>
+              <div className="metric-item">
+                <div className="metric-label">Decode Time</div>
+                <div className="metric-value">{(state.metrics.decodeTime / 1000).toFixed(2)}s</div>
+              </div>
+              <div className="metric-item">
+                <div className="metric-label">Total Time</div>
+                <div className="metric-value">{(state.metrics.totalTime / 1000).toFixed(2)}s</div>
+              </div>
+              <div className="metric-item">
+                <div className="metric-label">Chunks/Second</div>
+                <div className="metric-value">{state.metrics.chunksPerSecond.toFixed(1)}</div>
+              </div>
+              <div className="metric-item">
+                <div className="metric-label">Decoding Speed</div>
+                <div className="metric-value">{state.metrics.decodingSpeed.toFixed(2)} MB/s</div>
+              </div>
+              <div className="metric-item">
+                <div className="metric-label">Memory Usage</div>
+                <div className="metric-value">{formatFileSize(state.metrics.memoryUsage)}</div>
+              </div>
+              <div className="metric-item">
+                <div className="metric-label">Browser Frozen</div>
+                <div className="metric-value">{state.metrics.browserFrozen ? '❌ Yes' : '✅ No'}</div>
               </div>
             </div>
             {state.isIndexedDBTest && (
-              <p style={{ marginTop: '10px' }}><strong>💾 Data stored in IndexedDB during download</strong></p>
+              <div className="info" style={{ marginTop: '16px' }}>
+                <p style={{ margin: 0 }}>💾 Data was stored in IndexedDB during download for better memory management</p>
+              </div>
             )}
           </div>
 
-          <div style={{ marginTop: '20px' }}>
-            <button onClick={downloadFile}>
-              Download Decoded File
+          <div style={{ marginTop: '24px', display: 'flex', gap: '12px' }}>
+            <button className="btn-success" onClick={downloadFile}>
+              💾 Download Decoded File
             </button>
             <button onClick={onReset}>
-              Test Another File
+              🔄 Test Another File
             </button>
           </div>
         </div>

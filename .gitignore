@@ -47,14 +47,15 @@ coverage/
 *.temp
 .cache/
 
-# Large test files (keep small_test.txt but ignore large videos)
-backend/input_files/*.m4v
-backend/input_files/*.mp4
-backend/input_files/*.mov
-backend/input_files/*.avi
-backend/input_files/*.mkv
+# Backend cache and input files
+backend/cache/
+backend/input_files/*
+!backend/input_files/.gitkeep
+
+# Test files
+*.bin
+test*.txt
 test_files/
-!backend/input_files/small_test.txt
 
 # Git files
 .git/
