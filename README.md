@@ -2,25 +2,38 @@
 
 This project tests the feasibility of decoding large files from base64 chunks in the browser. It consists of a Python FastAPI backend that chunks and encodes files, and a React TypeScript frontend that fetches chunks and decodes them.
 
-## 🚀 Quick Deploy to DigitalOcean
+## 🚀 Deploy to DigitalOcean
 
-[![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/TSstaticWebsites/base64-test/tree/master)
+### Recommended: Manual Deployment via Dashboard
 
-### One-Click Deployment
-1. Click the button above
-2. Connect your GitHub account if needed
-3. Review the app configuration
-4. Click "Create Resources"
-5. Your app will be live in minutes!
+1. **Go to DigitalOcean Apps**
+   - Navigate to: https://cloud.digitalocean.com/apps
+   - Click "Create App"
 
-### Manual Deployment
+2. **Connect GitHub Repository**
+   - Choose GitHub as source
+   - Authorize if needed
+   - Select repository: `TSstaticWebsites/base64-test`
+   - Select branch: `master`
+
+3. **Configure & Deploy**
+   - DigitalOcean will auto-detect the Dockerfile
+   - Choose instance size (Basic $5/mo for testing)
+   - Click "Launch"
+
+### Alternative: Using DigitalOcean CLI
 ```bash
-# Using DigitalOcean CLI
+# Install doctl first, then:
 doctl apps create --spec .do/app.yaml
+```
 
-# Or deploy with Docker
-docker build -f Dockerfile.digitalocean -t base64-test .
+### Local Testing with Docker
+```bash
+# Build and run locally first to test
+docker build -t base64-test .
 docker run -p 80:80 base64-test
+
+# Then access at http://localhost
 ```
 
 ## Architecture

@@ -1,0 +1,13 @@
+spec:
+  name: browser-base64-decoding
+  services:
+    - name: web
+      git:
+        branch: master
+        repo_clone_url: https://github.com/TSstaticWebsites/base64-test.git
+      dockerfile_path: Dockerfile
+      instance_count: 1
+      instance_size_slug: basic-xxs
+      routes:
+        - path: /
+      http_port: 80
