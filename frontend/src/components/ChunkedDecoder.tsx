@@ -127,6 +127,7 @@ interface DecodingState {
   parallelConnections: number;
   downloadProgress: number;
   currentSpeed: number; // MB/s realtime
+  encodingMode: 'chunk' | 'full'; // New: encoding mode
   encoding: EncodingType; // Selected encoding type
 }
 
@@ -147,6 +148,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
     totalChunks: 0,
     downloadProgress: 0,
     currentSpeed: 0,
+    encodingMode: 'chunk', // Default to chunk mode
     encoding: 'base64' // Default encoding
   });
 
@@ -154,6 +156,11 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
   const decodeStartTimeRef = useRef<number>(0);
   const frozenCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const speedUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Helper to build API query params
+  const getApiParams = () => {
+    return `chunk_size=${state.customChunkSize}&encoding=${state.encoding}&mode=${state.encodingMode}`;
+  };
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -180,7 +187,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
     
     try {
       // Get file info with custom chunk size
-      const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?chunk_size=${state.customChunkSize}`);
+      const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?${getApiParams()}`);
       if (!infoResponse.ok) {
         throw new Error(`Failed to get file info: ${infoResponse.statusText}`);
       }
@@ -217,7 +224,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         
         // Download function for a single chunk
         const downloadChunk = async (index: number): Promise<void> => {
-          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?chunk_size=${state.customChunkSize}&encoding=${state.encoding}`);
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?${getApiParams()}`);
           if (!response.ok) {
             throw new Error(`Failed to fetch chunk ${index}`);
           }
@@ -257,7 +264,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         }, 100);
         
         for (let i = 0; i < totalChunks; i++) {
-          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}&encoding=${state.encoding}`);
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?${getApiParams()}`);
           if (!response.ok) {
             throw new Error(`Failed to fetch chunk ${i}`);
           }
@@ -314,23 +321,54 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         browserFrozen = await checkIfBrowserFrozen();
       }, 250);
       
-      // Concatenate all encoded chunks first, then decode
+      // Concatenate all encoded chunks first
       console.log('🔍 PROOF: Browser is doing the real work!');
       console.log(`📊 Total chunks received: ${chunks.length}`);
-      console.log(`📊 Total encoded size: ${chunks.join('').length} characters`);
-      console.log(`📊 Using encoding: ${state.encoding}`);
+      console.log(`📊 Using encoding: ${state.encoding}, mode: ${state.encodingMode}`);
       
-      const concatenatedEncoded = chunks.join('');
-      console.log(`✅ ${state.encoding} concatenation complete`);
+      let bytes: Uint8Array;
+      let estimatedMemoryUsage = 0;
       
-      // Check memory usage (approximation)
-      const estimatedMemoryUsage = concatenatedEncoded.length * 2; // rough estimate
-      console.log(`💾 Estimated memory usage: ${(estimatedMemoryUsage / 1024 / 1024).toFixed(1)}MB`);
-      
-      // Decode the entire encoded string - THIS IS THE HEAVY WORK!
-      console.log(`🔧 Starting ${state.encoding} decoding - this will stress the browser!`);
-      const bytes = decodeData(concatenatedEncoded, state.encoding);
-      console.log(`✅ Browser decoded ${(bytes.length / 1024 / 1024).toFixed(1)}MB of binary data from ${state.encoding}!`);
+      if (state.encodingMode === 'full') {
+        // FULL MODE: Chunks are already encoded, just reassemble and decode once
+        console.log('📦 FULL MODE: Reassembling pre-encoded chunks...');
+        const concatenatedEncoded = chunks.join('');
+        console.log(`📊 Total encoded size: ${concatenatedEncoded.length} characters`);
+        console.log(`✅ Reassembly complete`);
+        
+        // Estimate memory usage
+        estimatedMemoryUsage = concatenatedEncoded.length * 2; // rough estimate
+        console.log(`💾 Estimated memory usage: ${(estimatedMemoryUsage / 1024 / 1024).toFixed(1)}MB`);
+        
+        // Decode the entire encoded string at once
+        console.log(`🔧 Starting full ${state.encoding} decoding - single decode operation!`);
+        bytes = decodeData(concatenatedEncoded, state.encoding);
+        console.log(`✅ Decoded entire file: ${(bytes.length / 1024 / 1024).toFixed(1)}MB from ${state.encoding}!`);
+      } else {
+        // CHUNK MODE: Each chunk needs to be decoded individually then concatenated
+        console.log('📦 CHUNK MODE: Decoding chunks individually...');
+        const decodedChunks: Uint8Array[] = [];
+        
+        // Estimate memory usage from chunks
+        const totalEncodedSize = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        estimatedMemoryUsage = totalEncodedSize * 2; // rough estimate
+        console.log(`💾 Estimated memory usage: ${(estimatedMemoryUsage / 1024 / 1024).toFixed(1)}MB`);
+        
+        for (let i = 0; i < chunks.length; i++) {
+          const decodedChunk = decodeData(chunks[i], state.encoding);
+          decodedChunks.push(decodedChunk);
+        }
+        
+        // Concatenate all decoded binary chunks
+        const totalLength = decodedChunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        bytes = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of decodedChunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.length;
+        }
+        console.log(`✅ Decoded and reassembled: ${(bytes.length / 1024 / 1024).toFixed(1)}MB from ${state.encoding}!`);
+      }
       
       const blob = new Blob([bytes]);
       
@@ -382,7 +420,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       await chunkStorage.init();
       
       // First get file info with custom chunk size to know total chunks
-      const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?chunk_size=${state.customChunkSize}`);
+      const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?${getApiParams()}`);
       if (!infoResponse.ok) {
         throw new Error(`Failed to get file info: ${infoResponse.statusText}`);
       }
@@ -432,7 +470,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
             return;
           }
           
-          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?chunk_size=${state.customChunkSize}`);
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?${getApiParams()}`);
           if (!response.ok) {
             throw new Error(`Failed to fetch chunk ${index}`);
           }
@@ -468,7 +506,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
             continue;
           }
           
-          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}`);
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?${getApiParams()}`);
           if (!response.ok) {
             throw new Error(`Failed to fetch chunk ${i}`);
           }
@@ -535,7 +573,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       }, 250);
       
       // Get file info with custom chunk size to know expected chunk count
-      const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?chunk_size=${state.customChunkSize}`);
+      const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?${getApiParams()}`);
       if (!infoResponse.ok) {
         throw new Error(`Failed to get file info: ${infoResponse.statusText}`);
       }
@@ -685,6 +723,28 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
           <h3 style={{ marginBottom: '16px' }}>⚙️ Test Configuration</h3>
           
           <div style={{ marginBottom: '24px' }}>
+            <label htmlFor="encodingMode" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              Encoding Mode:
+            </label>
+            <select
+              id="encodingMode"
+              value={state.encodingMode}
+              onChange={(e) => setState(prev => ({ ...prev, encodingMode: e.target.value as 'chunk' | 'full' }))}
+              style={{
+                padding: '8px 12px',
+                marginBottom: '16px',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                fontSize: '14px',
+                width: '250px'
+              }}
+            >
+              <option value="chunk">Chunk Mode (encode each chunk)</option>
+              <option value="full">Full Mode (encode entire file)</option>
+            </select>
+            
             <label htmlFor="encoding" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
               Encoding Algorithm:
             </label>
@@ -865,7 +925,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       {state.isComplete && state.metrics && (
         <div className="card">
           <div className="success" style={{ marginBottom: '16px' }}>
-            <h3 style={{ margin: 0, color: 'var(--text-primary)' }}>✅ Processing Complete! {state.isIndexedDBTest ? '(IndexedDB)' : '(Memory)'}</h3>
+            <h3 style={{ margin: 0, color: '#064e3b' }}>✅ Processing Complete! {state.isIndexedDBTest ? '(IndexedDB)' : '(Memory)'}</h3>
           </div>
           
           <div className="performance-metrics">
@@ -924,7 +984,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
             </div>
             {state.isIndexedDBTest && (
               <div className="info" style={{ marginTop: '16px' }}>
-                <p style={{ margin: 0, color: 'var(--text-primary)' }}>💾 Data was stored in IndexedDB during download for better memory management</p>
+                <p style={{ margin: 0, color: '#0c4a6e' }}>💾 Data was stored in IndexedDB during download for better memory management</p>
               </div>
             )}
           </div>

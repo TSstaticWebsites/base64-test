@@ -23,6 +23,10 @@ class EncodingType(str, Enum):
     UUENCODE = "uuencode"
     YENC = "yenc"
 
+class EncodingMode(str, Enum):
+    CHUNK = "chunk"  # Encode each chunk separately (current behavior)
+    FULL = "full"    # Encode entire file, then chunk the encoded data
+
 app = FastAPI(title="Base64 Chunking Test Server")
 
 # Add request timeout middleware
@@ -101,6 +105,47 @@ def get_encoding_overhead(encoding: EncodingType) -> float:
     }
     return overheads.get(encoding, 1.33)
 
+def get_cached_chunk_count(file_id: str, encoding: EncodingType) -> int:
+    """Return the actual number of cached chunks for a given file/encoding.
+
+    Counts files in the encoding-specific cache directory. Falls back to the
+    legacy .b64 extension for base64 if present.
+    """
+    encoding_cache_key = f"{file_id}_{encoding.value}"
+    cache_dir = os.path.join(CACHE_FOLDER, encoding_cache_key)
+    if not os.path.exists(cache_dir):
+        return 0
+
+    # Primary pattern: chunks saved with .{encoding} extension
+    pattern_main = os.path.join(cache_dir, f"chunk_*.{encoding.value}")
+    files = glob.glob(pattern_main)
+
+    # Backward compatibility: consider .b64 for base64 only
+    if encoding == EncodingType.BASE64 and not files:
+        pattern_legacy = os.path.join(cache_dir, "chunk_*.b64")
+        files = glob.glob(pattern_legacy)
+
+    return len(files)
+
+def calculate_binary_chunk_size(target_encoded_size: int, encoding: EncodingType) -> int:
+    """Calculate how much binary data to read to produce target encoded size"""
+    overhead = get_encoding_overhead(encoding)
+    # Calculate binary size that will produce target encoded size
+    binary_size = int(target_encoded_size / overhead)
+    
+    # For base64/base32, ensure it's divisible by their block sizes
+    if encoding == EncodingType.BASE64 or encoding == EncodingType.UUENCODE:
+        # Base64 encodes 3 bytes to 4 chars, so align to 3-byte boundary
+        binary_size = (binary_size // 3) * 3
+    elif encoding == EncodingType.BASE32:
+        # Base32 encodes 5 bytes to 8 chars, so align to 5-byte boundary
+        binary_size = (binary_size // 5) * 5
+    elif encoding == EncodingType.BASE85:
+        # Base85 encodes 4 bytes to 5 chars, so align to 4-byte boundary
+        binary_size = (binary_size // 4) * 4
+    
+    return binary_size
+
 def get_file_hash(file_path: str) -> str:
     """Calculate SHA256 hash of file for unique identification"""
     sha256_hash = hashlib.sha256()
@@ -159,15 +204,21 @@ def register_file(file_path: str) -> Optional[Dict]:
         print(f"   Traceback: {traceback.format_exc()}")
         return None
 
-def process_file_on_demand(file_id: str, encoding: EncodingType = EncodingType.BASE64) -> bool:
-    """Process a file into base64 chunks on first request"""
+def process_file_full_encoding(file_id: str, encoding: EncodingType = EncodingType.BASE64, target_chunk_size: int = CHUNK_SIZE) -> bool:
+    """Process entire file by encoding it completely first, then chunking the encoded data"""
     if file_id not in processed_files:
         return False
     
     file_info = processed_files[file_id]
     
-    # Skip if already processed
-    if file_info.get('is_processed', False):
+    # Create cache directory for full-encoded files
+    encoding_cache_key = f"{file_id}_{encoding.value}_full"
+    file_cache_dir = os.path.join(CACHE_FOLDER, encoding_cache_key)
+    
+    # Check if already processed with this encoding in full mode
+    if os.path.exists(file_cache_dir) and os.path.exists(os.path.join(file_cache_dir, f"chunk_0.{encoding.value}")):
+        print(f"✅ Already cached with {encoding.value} full encoding: {file_info['filename']}")
+        file_info['cache_dir'] = file_cache_dir
         return True
     
     start_time = time.time()
@@ -175,23 +226,111 @@ def process_file_on_demand(file_id: str, encoding: EncodingType = EncodingType.B
     filename = file_info['filename']
     
     try:
-        print(f"🔄 Processing file on-demand: {filename}")
+        print(f"🔄 Processing FULL file encoding: {filename} with {encoding.value}")
         print(f"   File size: {file_info['original_size'] / (1024*1024):.1f}MB")
         
-        # Create cache directory for this file
-        file_cache_dir = os.path.join(CACHE_FOLDER, file_id)
+        # Create cache directory
         os.makedirs(file_cache_dir, exist_ok=True)
         
+        # First, encode the entire file
+        print(f"   Step 1: Encoding entire file...")
+        encode_start = time.time()
+        
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+        
+        # Encode entire file at once
+        encoded_data = encode_data(file_data, encoding)
+        
+        encode_time = time.time() - encode_start
+        print(f"   Encoding completed in {encode_time:.1f}s")
+        print(f"   Encoded size: {len(encoded_data) / (1024*1024):.1f}MB")
+        
+        # Now chunk the encoded data
+        print(f"   Step 2: Chunking encoded data into {target_chunk_size / 1024:.1f}KB chunks...")
+        
+        chunk_index = 0
+        total_encoded_size = len(encoded_data)
+        
+        for i in range(0, total_encoded_size, target_chunk_size):
+            chunk = encoded_data[i:i + target_chunk_size]
+            
+            # Save chunk to cache file
+            chunk_file = os.path.join(file_cache_dir, f"chunk_{chunk_index}.{encoding.value}")
+            
+            if encoding == EncodingType.YENC:
+                with open(chunk_file, 'wb') as cf:
+                    cf.write(chunk.encode('latin-1'))
+            else:
+                with open(chunk_file, 'w') as cf:
+                    cf.write(chunk)
+            
+            chunk_index += 1
+        
+        # Update file info
+        file_info['cache_dir'] = file_cache_dir
+        file_info['cached_chunks'] = chunk_index
+        file_info[f'encoded_size_{encoding.value}_full'] = total_encoded_size
+        file_info['total_chunks'] = chunk_index
+        file_info[f'is_processed_{encoding.value}_full'] = True
+        
+        process_time = time.time() - start_time
+        print(f"✅ Full encoding complete: {filename}")
+        print(f"   Total time: {process_time:.1f}s")
+        print(f"   Chunks created: {chunk_index}")
+        print(f"   Encoded size: {total_encoded_size / (1024*1024):.1f}MB")
+        
+        return True
+        
+    except Exception as e:
+        print(f"❌ Error processing file with full encoding {filename}: {str(e)}")
+        print(f"   Traceback: {traceback.format_exc()}")
+        return False
+
+def process_file_on_demand(file_id: str, encoding: EncodingType = EncodingType.BASE64, target_chunk_size: int = CHUNK_SIZE) -> bool:
+    """Process a file into encoded chunks on first request"""
+    if file_id not in processed_files:
+        return False
+    
+    file_info = processed_files[file_id]
+    
+    # Create encoding-specific cache directory
+    encoding_cache_key = f"{file_id}_{encoding.value}"
+    file_cache_dir = os.path.join(CACHE_FOLDER, encoding_cache_key)
+    
+    # Check if already processed with this encoding
+    if os.path.exists(file_cache_dir) and os.path.exists(os.path.join(file_cache_dir, f"chunk_0.{encoding.value}")):
+        print(f"✅ Already cached with {encoding.value} encoding: {file_info['filename']}")
+        file_info['cache_dir'] = file_cache_dir
+        return True
+    
+    start_time = time.time()
+    file_path = file_info['file_path']
+    filename = file_info['filename']
+    
+    try:
+        print(f"🔄 Processing file on-demand: {filename} with {encoding.value} encoding")
+        print(f"   File size: {file_info['original_size'] / (1024*1024):.1f}MB")
+        
+        # Create cache directory for this file + encoding
+        os.makedirs(file_cache_dir, exist_ok=True)
+        
+        # Calculate optimal binary chunk size for target encoded chunk size
+        binary_chunk_size = calculate_binary_chunk_size(target_chunk_size, encoding)
+        
+        print(f"   Target encoded chunk size: {target_chunk_size / 1024:.1f}KB")
+        print(f"   Binary chunk size for {encoding.value}: {binary_chunk_size / 1024:.1f}KB")
+        
         # Process file in chunks and save to cache
-        total_b64_size = 0
+        total_encoded_size = 0
         chunk_index = 0
         last_log_time = time.time()
         bytes_processed = 0
         
         with open(file_path, 'rb') as f:
             while True:
-                # Read chunk from file
-                chunk_data = f.read(FILE_READ_CHUNK_SIZE)
+                # Read optimal amount of binary data for target encoded size
+                chunk_data = f.read(binary_chunk_size)
                 if not chunk_data:
                     break
                 
@@ -210,7 +349,7 @@ def process_file_on_demand(file_id: str, encoding: EncodingType = EncodingType.B
                     with open(chunk_file, 'w') as cf:
                         cf.write(encoded_chunk)
                 
-                total_b64_size += len(encoded_chunk)
+                total_encoded_size += len(encoded_chunk)
                 chunk_index += 1
                 
                 # Log progress every 2 seconds
@@ -222,18 +361,19 @@ def process_file_on_demand(file_id: str, encoding: EncodingType = EncodingType.B
                           f"{chunk_index} chunks created, {speed:.1f}MB/s")
                     last_log_time = current_time
         
-        # Update file info with actual values
+        # Update file info with actual values for this encoding
         file_info['cache_dir'] = file_cache_dir
         file_info['cached_chunks'] = chunk_index
-        file_info['b64_size'] = total_b64_size
-        file_info['total_chunks'] = math.ceil(total_b64_size / CHUNK_SIZE)
-        file_info['is_processed'] = True
+        file_info[f'encoded_size_{encoding.value}'] = total_encoded_size
+        file_info['total_chunks'] = chunk_index
+        # Don't mark as globally processed - each encoding is separate
+        file_info[f'is_processed_{encoding.value}'] = True
         
         process_time = time.time() - start_time
         print(f"✅ On-demand processing complete: {filename}")
         print(f"   Total time: {process_time:.1f}s")
         print(f"   Chunks created: {chunk_index}")
-        print(f"   Base64 size: {total_b64_size / (1024*1024):.1f}MB")
+        print(f"   Encoded size: {total_encoded_size / (1024*1024):.1f}MB")
         print(f"   Processing speed: {file_info['original_size'] / (1024*1024*process_time):.1f}MB/s")
         
         return True
@@ -275,10 +415,13 @@ async def list_available_files():
 
 def load_chunk_from_cache(file_info: Dict, chunk_number: int, chunk_size: int, encoding: EncodingType = EncodingType.BASE64) -> str:
     """Load a specific chunk from cached encoded files"""
-    cache_dir = file_info.get('cache_dir')
+    # Use encoding-specific cache directory
+    file_id = [k for k, v in processed_files.items() if v == file_info][0]
+    encoding_cache_key = f"{file_id}_{encoding.value}"
+    cache_dir = os.path.join(CACHE_FOLDER, encoding_cache_key)
     
-    if not cache_dir or not os.path.exists(cache_dir):
-        raise HTTPException(status_code=500, detail="Cache not available for this file")
+    if not os.path.exists(cache_dir):
+        raise HTTPException(status_code=500, detail=f"Cache not available for {encoding.value} encoding")
     
     # Calculate byte position
     start_pos = chunk_number * chunk_size
@@ -288,7 +431,11 @@ def load_chunk_from_cache(file_info: Dict, chunk_number: int, chunk_size: int, e
     result = []
     current_pos = 0
     
-    for i in range(file_info['cached_chunks']):
+    # Determine how many cached chunks exist for this encoding
+    file_id = [k for k, v in processed_files.items() if v == file_info][0]
+    available_chunks = get_cached_chunk_count(file_id, encoding)
+
+    for i in range(available_chunks):
         # Look for chunk file with the correct encoding extension
         chunk_file = os.path.join(cache_dir, f"chunk_{i}.{encoding.value}")
         if not os.path.exists(chunk_file):
@@ -324,7 +471,8 @@ async def get_chunk(
     file_id: str, 
     chunk_number: int, 
     chunk_size: int = Query(default=CHUNK_SIZE, ge=1024, le=10485760),
-    encoding: EncodingType = Query(default=EncodingType.BASE64)
+    encoding: EncodingType = Query(default=EncodingType.BASE64),
+    mode: EncodingMode = Query(default=EncodingMode.CHUNK)
 ):
     """Get a specific chunk of the encoded file with custom chunk size and encoding"""
     if file_id not in processed_files:
@@ -332,16 +480,41 @@ async def get_chunk(
     
     file_info = processed_files[file_id]
     
+    # Determine cache key based on mode
+    if mode == EncodingMode.FULL:
+        encoding_cache_key = f"{file_id}_{encoding.value}_full"
+    else:
+        encoding_cache_key = f"{file_id}_{encoding.value}"
+    
+    cache_dir = os.path.join(CACHE_FOLDER, encoding_cache_key)
+    
     # Process file on-demand if not already processed
-    if not file_info.get('is_processed', False):
-        print(f"📊 First chunk request for {file_info['filename']}, processing on-demand with {encoding.value} encoding...")
-        if not process_file_on_demand(file_id, encoding):
-            raise HTTPException(status_code=500, detail="Failed to process file")
+    if not os.path.exists(cache_dir) or not any(os.path.exists(os.path.join(cache_dir, f"chunk_0.{encoding.value}")) for _ in [None]):
+        print(f"📊 Processing {file_info['filename']} with {encoding.value} encoding (mode: {mode.value})...")
+        file_info['cache_dir'] = cache_dir
+        
+        # Use appropriate processing function based on mode
+        if mode == EncodingMode.FULL:
+            if not process_file_full_encoding(file_id, encoding, chunk_size):
+                raise HTTPException(status_code=500, detail="Failed to process file with full encoding")
+        else:
+            if not process_file_on_demand(file_id, encoding, chunk_size):
+                raise HTTPException(status_code=500, detail="Failed to process file")
+        
         # Refresh file_info after processing
         file_info = processed_files[file_id]
     
-    # Calculate chunks based on custom chunk size
-    total_chunks_custom = math.ceil(file_info['b64_size'] / chunk_size)
+    # Get actual chunk count from cached files
+    # For full mode, we need to check the full-mode cache
+    if mode == EncodingMode.FULL:
+        total_chunks_custom = len(glob.glob(os.path.join(cache_dir, f"chunk_*.{encoding.value}")))
+    else:
+        total_chunks_custom = get_cached_chunk_count(file_id, encoding)
+    if total_chunks_custom == 0:
+        # Estimate if not cached yet
+        encoding_overhead = get_encoding_overhead(encoding)
+        estimated_size = file_info['original_size'] * encoding_overhead
+        total_chunks_custom = math.ceil(estimated_size / chunk_size)
     
     if chunk_number >= total_chunks_custom:
         raise HTTPException(status_code=404, detail="Chunk not found")
@@ -359,20 +532,44 @@ async def get_chunk(
     }
 
 @app.get("/file/{file_id}/info")
-async def get_file_info(file_id: str, chunk_size: int = Query(default=CHUNK_SIZE, ge=1024, le=10485760)):
-    """Get information about a file with custom chunk size"""
+async def get_file_info(
+    file_id: str, 
+    chunk_size: int = Query(default=CHUNK_SIZE, ge=1024, le=10485760),
+    encoding: EncodingType = Query(default=EncodingType.BASE64),
+    mode: EncodingMode = Query(default=EncodingMode.CHUNK)
+):
+    """Get information about a file with custom chunk size and encoding"""
     if file_id not in processed_files:
         raise HTTPException(status_code=404, detail="File not found")
     
     file_info = processed_files[file_id]
     
-    # For unprocessed files, b64_size is an estimate
-    if not file_info.get('is_processed', False):
-        print(f"ℹ️ File {file_info['filename']} not yet processed, returning estimates")
+    # Determine cache key based on mode
+    if mode == EncodingMode.FULL:
+        encoding_cache_key = f"{file_id}_{encoding.value}_full"
+    else:
+        encoding_cache_key = f"{file_id}_{encoding.value}"
     
-    # Calculate chunks based on custom chunk size
-    total_chunks_custom = math.ceil(file_info['b64_size'] / chunk_size)
-    
+    cache_dir = os.path.join(CACHE_FOLDER, encoding_cache_key)
+    has_cached = os.path.exists(cache_dir) and (
+        os.path.exists(os.path.join(cache_dir, f"chunk_0.{encoding.value}")) or
+        (encoding == EncodingType.BASE64 and os.path.exists(os.path.join(cache_dir, "chunk_0.b64")))
+    )
+
+    # Get actual cached chunk count
+    if mode == EncodingMode.FULL and has_cached:
+        total_chunks_custom = len(glob.glob(os.path.join(cache_dir, f"chunk_*.{encoding.value}")))
+    elif has_cached:
+        total_chunks_custom = get_cached_chunk_count(file_id, encoding)
+    else:
+        total_chunks_custom = 0
+
+    # If not cached yet for this encoding, return an estimate
+    if total_chunks_custom == 0:
+        encoding_overhead = get_encoding_overhead(encoding)
+        estimated_size = file_info['original_size'] * encoding_overhead
+        total_chunks_custom = math.ceil(estimated_size / chunk_size)
+
     return {
         'file_id': file_id,
         'filename': file_info['filename'],
@@ -382,7 +579,13 @@ async def get_file_info(file_id: str, chunk_size: int = Query(default=CHUNK_SIZE
         'chunk_size_used': chunk_size,
         'default_chunks': file_info['total_chunks'],
         'default_chunk_size': CHUNK_SIZE,
-        'is_processed': file_info.get('is_processed', False)
+        'encoding_mode': mode.value,
+        # Report processed state for the requested encoding and mode
+        'is_processed': bool(
+            (mode == EncodingMode.FULL and file_info.get(f'is_processed_{encoding.value}_full', False)) or
+            (mode == EncodingMode.CHUNK and file_info.get(f'is_processed_{encoding.value}', False)) or
+            has_cached
+        )
     }
 
 @app.delete("/file/{file_id}")
