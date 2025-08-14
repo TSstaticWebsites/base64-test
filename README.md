@@ -4,7 +4,7 @@ This project tests the feasibility of decoding large files from base64 chunks in
 
 ## 🚀 Quick Deploy to DigitalOcean
 
-[![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/TSstaticWebsites/base64-test/tree/master)
+[![Deploy to DigitalOcean](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/TSstaticWebsites/base64-test)
 
 ### One-Click Deployment
 1. Click the button above
