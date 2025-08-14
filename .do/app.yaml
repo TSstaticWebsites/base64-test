@@ -4,7 +4,7 @@ services:
 - name: web
   github:
     repo: TSstaticWebsites/base64-test
-    branch: main
+    branch: master
     deploy_on_push: true
   dockerfile_path: Dockerfile.digitalocean
   instance_count: 1
