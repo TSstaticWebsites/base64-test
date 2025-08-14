@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import FileSelector from './components/FileSelector';
 import ChunkedDecoder from './components/ChunkedDecoder';
-import ChunkedDecoderOptimized from './components/ChunkedDecoderOptimized';
 import FileManager from './components/FileManager';
 import { chunkStorage } from './utils/indexeddb';
 
@@ -13,7 +12,7 @@ interface FileInfo {
   b64_size: number;
 }
 
-type Page = 'test' | 'manager' | 'optimized';
+type Page = 'test' | 'manager';
 
 function App() {
   const [selectedFile, setSelectedFile] = useState<FileInfo | null>(null);
@@ -54,26 +53,11 @@ function App() {
         <div className="nav-buttons">
           <button
             className="btn-secondary"
-            onClick={() => setCurrentPage('test')}
-            style={{ opacity: currentPage === 'test' ? 1 : 0.7 }}
+            onClick={() => setCurrentPage(currentPage === 'test' ? 'manager' : 'test')}
           >
-            🧪 Standard Test
+            {currentPage === 'test' ? '📁 File Manager' : '🧪 Test Page'}
           </button>
-          <button
-            className="btn-secondary"
-            onClick={() => setCurrentPage('optimized')}
-            style={{ opacity: currentPage === 'optimized' ? 1 : 0.7 }}
-          >
-            ⚡ Optimized Test
-          </button>
-          <button
-            className="btn-secondary"
-            onClick={() => setCurrentPage('manager')}
-            style={{ opacity: currentPage === 'manager' ? 1 : 0.7 }}
-          >
-            📁 File Manager
-          </button>
-          {(currentPage === 'test' || currentPage === 'optimized') && (
+          {currentPage === 'test' && (
             <button 
               className="btn-danger"
               onClick={clearIndexedDB}
@@ -87,32 +71,15 @@ function App() {
       
       {currentPage === 'manager' ? (
         <FileManager />
-      ) : currentPage === 'optimized' ? (
-        <>
-          <p>
-            <strong>⚡ Optimized Mode:</strong> Parallel downloads, real-time speed tracking, and performance comparison.
-          </p>
-          <p>
-            Test with different chunk sizes and parallel connections to find the optimal configuration.
-          </p>
-          
-          {!selectedFile ? (
-            <FileSelector onFileSelected={handleFileSelected} />
-          ) : (
-            <ChunkedDecoderOptimized 
-              fileInfo={selectedFile}
-            />
-          )}
-        </>
       ) : (
         <>
           <p>
-            <strong>Automatic File Processing:</strong> Files in <code>backend/input_files/</code> folder are automatically converted to base64 chunks.
+            <strong>Browser Base64 Decoding Test:</strong> Test the feasibility of decoding large files from base64 chunks.
           </p>
           <p>
-            Select a file below to test browser decoding performance and feasibility.
+            Select a file below and configure download settings (sequential or parallel) for optimal performance.
             <br />
-            <strong>Two test modes:</strong> Memory-only vs IndexedDB storage comparison.
+            <strong>Two test modes:</strong> Memory-only vs IndexedDB storage. <strong>Parallel downloads</strong> can speed up transfers 2-4x!
           </p>
           
           {!selectedFile ? (

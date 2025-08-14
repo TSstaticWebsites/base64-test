@@ -24,7 +24,10 @@ interface PerformanceMetrics {
   memoryUsage: number;
   chunksPerSecond: number;
   decodingSpeed: number; // MB/s
+  downloadSpeed: number; // MB/s
   browserFrozen: boolean;
+  totalDataTransferred: number; // bytes
+  parallelConnections: number;
 }
 
 interface DecodingState {
@@ -32,6 +35,7 @@ interface DecodingState {
   isDecoding: boolean;
   isComplete: boolean;
   currentChunk: number;
+  totalChunks: number;
   chunks: string[];
   error: string;
   decodedBlob: Blob | null;
@@ -39,6 +43,9 @@ interface DecodingState {
   isIndexedDBTest: boolean;
   storedChunks: number;
   customChunkSize: number;
+  parallelConnections: number;
+  downloadProgress: number;
+  currentSpeed: number; // MB/s realtime
 }
 
 const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) => {
@@ -53,12 +60,17 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
     metrics: null,
     isIndexedDBTest: false,
     storedChunks: 0,
-    customChunkSize: 1024 * 1024 // Default 1MB
+    customChunkSize: 1024 * 1024, // Default 1MB
+    parallelConnections: 1, // Default sequential
+    totalChunks: 0,
+    downloadProgress: 0,
+    currentSpeed: 0
   });
 
   const downloadStartTimeRef = useRef<number>(0);
   const decodeStartTimeRef = useRef<number>(0);
   const frozenCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const speedUpdateIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const formatFileSize = (bytes: number): string => {
     if (bytes === 0) return '0 Bytes';
@@ -80,53 +92,126 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
   };
 
   const downloadChunks = async () => {
-    setState(prev => ({ ...prev, isDownloading: true, error: '' }));
+    setState(prev => ({ ...prev, isDownloading: true, error: '', downloadProgress: 0, currentSpeed: 0 }));
     downloadStartTimeRef.current = performance.now();
     
     try {
-      // First get file info with custom chunk size to know total chunks
+      // Get file info with custom chunk size
       const infoResponse = await fetch(`${API_BASE}/file/${fileInfo.file_id}/info?chunk_size=${state.customChunkSize}`);
       if (!infoResponse.ok) {
         throw new Error(`Failed to get file info: ${infoResponse.statusText}`);
       }
       const fileInfoCustom = await infoResponse.json();
       
+      const totalChunks = fileInfoCustom.total_chunks;
+      setState(prev => ({ ...prev, totalChunks }));
+      
       console.log(`🔍 MEMORY TEST: Using chunk size ${formatFileSize(state.customChunkSize)}`);
-      console.log(`📊 Total chunks with custom size: ${fileInfoCustom.total_chunks} (vs ${fileInfo.total_chunks} default)`);
+      console.log(`📊 Total chunks: ${totalChunks}, Parallel connections: ${state.parallelConnections}`);
       
-      const chunks: string[] = [];
+      let chunks: string[];
+      let totalBytesDownloaded = 0;
+      const startTime = performance.now();
       
-      for (let i = 0; i < fileInfoCustom.total_chunks; i++) {
-        setState(prev => ({ ...prev, currentChunk: i + 1 }));
+      if (state.parallelConnections > 1) {
+        // Parallel download
+        chunks = new Array(totalChunks).fill(null);
+        let completedChunks = 0;
         
-        const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch chunk ${i}`);
+        // Speed tracking interval
+        speedUpdateIntervalRef.current = setInterval(() => {
+          const elapsed = (performance.now() - startTime) / 1000;
+          const speed = (totalBytesDownloaded / (1024 * 1024)) / elapsed;
+          const progress = (completedChunks / totalChunks) * 100;
+          
+          setState(prev => ({
+            ...prev,
+            currentSpeed: speed,
+            downloadProgress: progress,
+            currentChunk: completedChunks
+          }));
+        }, 100);
+        
+        // Download function for a single chunk
+        const downloadChunk = async (index: number): Promise<void> => {
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?chunk_size=${state.customChunkSize}`);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch chunk ${index}`);
+          }
+          
+          const chunkData = await response.json();
+          chunks[index] = chunkData.data;
+          totalBytesDownloaded += chunkData.data.length;
+          completedChunks++;
+        };
+        
+        // Process chunks in parallel batches
+        const batchSize = state.parallelConnections;
+        for (let i = 0; i < totalChunks; i += batchSize) {
+          const batch = [];
+          for (let j = i; j < Math.min(i + batchSize, totalChunks); j++) {
+            batch.push(downloadChunk(j));
+          }
+          await Promise.all(batch);
         }
         
-        const chunkData = await response.json();
-        chunks.push(chunkData.data);
+      } else {
+        // Sequential download (no delays!)
+        chunks = [];
         
-        // Small delay to prevent overwhelming the browser
-        if (i % 10 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 1));
+        // Speed tracking interval
+        speedUpdateIntervalRef.current = setInterval(() => {
+          const elapsed = (performance.now() - startTime) / 1000;
+          const speed = (totalBytesDownloaded / (1024 * 1024)) / elapsed;
+          const progress = (chunks.length / totalChunks) * 100;
+          
+          setState(prev => ({
+            ...prev,
+            currentSpeed: speed,
+            downloadProgress: progress,
+            currentChunk: chunks.length
+          }));
+        }, 100);
+        
+        for (let i = 0; i < totalChunks; i++) {
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}`);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch chunk ${i}`);
+          }
+          
+          const chunkData = await response.json();
+          chunks.push(chunkData.data);
+          totalBytesDownloaded += chunkData.data.length;
         }
       }
       
+      // Clear speed interval
+      if (speedUpdateIntervalRef.current) {
+        clearInterval(speedUpdateIntervalRef.current);
+      }
+      
       const downloadTime = performance.now() - downloadStartTimeRef.current;
+      const finalSpeed = (totalBytesDownloaded / (1024 * 1024)) / (downloadTime / 1000);
       
       setState(prev => ({ 
         ...prev, 
         chunks,
         isDownloading: false,
+        downloadProgress: 100,
         metrics: { 
           ...prev.metrics!,
           downloadTime,
-          chunksPerSecond: fileInfoCustom.total_chunks / (downloadTime / 1000)
+          downloadSpeed: finalSpeed,
+          totalDataTransferred: totalBytesDownloaded,
+          chunksPerSecond: totalChunks / (downloadTime / 1000),
+          parallelConnections: state.parallelConnections
         } as PerformanceMetrics
       }));
       
     } catch (err) {
+      if (speedUpdateIntervalRef.current) {
+        clearInterval(speedUpdateIntervalRef.current);
+      }
       setState(prev => ({ 
         ...prev, 
         isDownloading: false, 
@@ -190,7 +275,10 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
           memoryUsage: estimatedMemoryUsage,
           chunksPerSecond: prev.metrics?.chunksPerSecond || 0,
           decodingSpeed: (fileInfo.original_size / 1024 / 1024) / (decodeTime / 1000),
-          browserFrozen
+          downloadSpeed: prev.metrics?.downloadSpeed || 0,
+          browserFrozen,
+          totalDataTransferred: prev.metrics?.totalDataTransferred || 0,
+          parallelConnections: prev.metrics?.parallelConnections || 1
         }
       }));
       
@@ -256,10 +344,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         const updatedCount = await chunkStorage.getStoredChunkCount(cacheKey);
         setState(prev => ({ ...prev, storedChunks: updatedCount }));
         
-        // Small delay to prevent overwhelming the browser
-        if (i % 5 === 0) {
-          await new Promise(resolve => setTimeout(resolve, 1));
-        }
+        // No delay needed - browsers can handle it!
       }
       
       const downloadTime = performance.now() - downloadStartTimeRef.current;
@@ -356,7 +441,10 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
           memoryUsage: estimatedMemoryUsage,
           chunksPerSecond: prev.metrics?.chunksPerSecond || 0,
           decodingSpeed: (fileInfo.original_size / 1024 / 1024) / (decodeTime / 1000),
-          browserFrozen
+          downloadSpeed: prev.metrics?.downloadSpeed || 0,
+          browserFrozen,
+          totalDataTransferred: prev.metrics?.totalDataTransferred || 0,
+          parallelConnections: prev.metrics?.parallelConnections || 1
         }
       }));
       
@@ -443,6 +531,31 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
           <h3 style={{ marginBottom: '16px' }}>⚙️ Test Configuration</h3>
           
           <div style={{ marginBottom: '24px' }}>
+            <label htmlFor="parallelConnections" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
+              Download Mode:
+            </label>
+            <select
+              id="parallelConnections"
+              value={state.parallelConnections}
+              onChange={(e) => setState(prev => ({ ...prev, parallelConnections: parseInt(e.target.value) }))}
+              style={{
+                padding: '8px 12px',
+                marginBottom: '16px',
+                background: 'var(--bg-tertiary)',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius-sm)',
+                color: 'var(--text-primary)',
+                fontSize: '14px',
+                width: '250px'
+              }}
+            >
+              <option value={1}>Sequential (1 connection)</option>
+              <option value={2}>Parallel (2 connections)</option>
+              <option value={4}>Parallel (4 connections)</option>
+              <option value={6}>Parallel (6 connections)</option>
+              <option value={8}>Parallel (8 connections)</option>
+            </select>
+            
             <label htmlFor="chunkSize" style={{ display: 'block', marginBottom: '8px', fontWeight: '600', color: 'var(--text-secondary)' }}>
               Custom Chunk Size:
             </label>
@@ -523,13 +636,22 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
         <div className="card">
           <h3 style={{ marginBottom: '16px' }}>
             {state.isIndexedDBTest ? '💾 Downloading to IndexedDB...' : '🧪 Downloading to Memory...'}
+            {state.parallelConnections > 1 && ` (${state.parallelConnections} parallel)`}
           </h3>
           <div className="progress-bar">
             <div 
               className="progress-fill" 
-              style={{ width: `${(state.currentChunk / Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)) * 100}%` }}
+              style={{ width: `${state.downloadProgress}%` }}
             />
           </div>
+          <p style={{ marginTop: '12px' }}>
+            Progress: {state.currentChunk}/{state.totalChunks || '?'} chunks ({state.downloadProgress.toFixed(1)}%)
+          </p>
+          {state.currentSpeed > 0 && (
+            <p style={{ fontSize: '1.2rem', fontWeight: 'bold', color: 'var(--primary)', marginTop: '8px' }}>
+              Speed: {state.currentSpeed.toFixed(2)} MB/s
+            </p>
+          )}
           <div style={{ marginTop: '12px', color: 'var(--text-secondary)' }}>
             <p>📦 Progress: <strong>{state.currentChunk}</strong> / <strong>{Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</strong> chunks</p>
             <p>📊 Chunk size: <strong>{formatFileSize(state.customChunkSize)}</strong></p>
