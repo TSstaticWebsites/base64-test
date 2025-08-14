@@ -1,18 +1,13 @@
 name: browser-base64-decoding
 region: nyc
 services:
-- name: web
+- dockerfile_path: Dockerfile.digitalocean
   github:
-    repo: TSstaticWebsites/base64-test
     branch: master
     deploy_on_push: true
-  dockerfile_path: Dockerfile.digitalocean
+    repo: TSstaticWebsites/base64-test
+  http_port: 80
   instance_count: 1
   instance_size_slug: basic-s
-  http_port: 80
-  health_check:
-    http_path: /
-    initial_delay_seconds: 10
-    period_seconds: 30
-  routes:
-  - path: /
+  name: web
+  source_dir: /
