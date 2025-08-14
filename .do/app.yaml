@@ -1,13 +1,15 @@
-name: browser-base64-decoding
-region: nyc
-services:
-- dockerfile_path: Dockerfile.digitalocean
-  github:
-    branch: master
-    deploy_on_push: true
-    repo: TSstaticWebsites/base64-test
-  http_port: 80
-  instance_count: 1
-  instance_size_slug: basic-s
-  name: web
-  source_dir: /
+spec:
+  name: browser-base64-decoding
+  services:
+  - environment_slug: python
+    git:
+      branch: master
+      repo_clone_url: https://github.com/TSstaticWebsites/base64-test.git
+    dockerfile_path: Dockerfile
+    http_port: 80
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    name: web
+    routes:
+    - path: /
+    source_dir: /
