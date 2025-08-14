@@ -36,6 +36,7 @@ interface DecodingState {
   parallelConnections: number;
   downloadProgress: number; // percentage
   currentSpeed: number; // MB/s
+  decodedBlobUrl: string | null; // Store the decoded file URL
 }
 
 interface ChunkedDecoderProps {
@@ -55,7 +56,8 @@ const ChunkedDecoderOptimized: React.FC<ChunkedDecoderProps> = ({ fileInfo }) =>
     customChunkSize: 1024 * 1024, // 1MB default
     parallelConnections: 4, // Default parallel connections
     downloadProgress: 0,
-    currentSpeed: 0
+    currentSpeed: 0,
+    decodedBlobUrl: null
   });
 
   const downloadStartTimeRef = useRef<number>(0);
@@ -295,6 +297,7 @@ const ChunkedDecoderOptimized: React.FC<ChunkedDecoderProps> = ({ fileInfo }) =>
         ...prev,
         isDecoding: false,
         isComplete: true,
+        decodedBlobUrl: downloadUrl, // Store the URL for manual download
         metrics: {
           ...prev.metrics!,
           decodeTime,
@@ -305,14 +308,7 @@ const ChunkedDecoderOptimized: React.FC<ChunkedDecoderProps> = ({ fileInfo }) =>
         }
       }));
       
-      // Auto-download the file
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = fileInfo.filename;
-      a.click();
-      
-      // Clean up
-      setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      console.log('✅ File decoded and ready for download!');
       
     } catch (err) {
       setState(prev => ({ 
@@ -469,9 +465,36 @@ const ChunkedDecoderOptimized: React.FC<ChunkedDecoderProps> = ({ fileInfo }) =>
               </table>
             </div>
             
-            <button onClick={() => window.location.reload()} style={{ marginTop: '20px' }}>
-              🔄 Run Another Test
-            </button>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center', marginTop: '20px' }}>
+              {state.decodedBlobUrl && (
+                <a 
+                  href={state.decodedBlobUrl} 
+                  download={fileInfo.filename}
+                  className="button"
+                  style={{ 
+                    textDecoration: 'none',
+                    background: 'var(--success)',
+                    padding: '12px 24px',
+                    borderRadius: 'var(--radius)',
+                    color: 'white',
+                    display: 'inline-block',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  💾 Download Decoded File
+                </a>
+              )}
+              <button 
+                onClick={() => {
+                  if (state.decodedBlobUrl) {
+                    URL.revokeObjectURL(state.decodedBlobUrl);
+                  }
+                  window.location.reload();
+                }}
+              >
+                🔄 Run Another Test
+              </button>
+            </div>
           </div>
         )}
         
