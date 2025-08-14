@@ -296,7 +296,7 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
   };
 
   const downloadChunksToIndexedDB = async () => {
-    setState(prev => ({ ...prev, isDownloading: true, error: '', isIndexedDBTest: true }));
+    setState(prev => ({ ...prev, isDownloading: true, error: '', isIndexedDBTest: true, downloadProgress: 0, currentSpeed: 0 }));
     downloadStartTimeRef.current = performance.now();
     
     try {
@@ -310,8 +310,11 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       }
       const fileInfoCustom = await infoResponse.json();
       
+      const totalChunks = fileInfoCustom.total_chunks;
+      setState(prev => ({ ...prev, totalChunks }));
+      
       console.log(`🔍 INDEXEDDB TEST: Using chunk size ${formatFileSize(state.customChunkSize)}`);
-      console.log(`📊 Total chunks with custom size: ${fileInfoCustom.total_chunks} (vs ${fileInfo.total_chunks} default)`);
+      console.log(`📊 Total chunks: ${totalChunks}, Parallel connections: ${state.parallelConnections}`);
       
       // Check if chunks already exist (using custom size as part of key)
       const cacheKey = `${fileInfo.file_id}_${state.customChunkSize}`;
@@ -320,34 +323,95 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       
       setState(prev => ({ ...prev, storedChunks: existingChunks }));
       
-      for (let i = 0; i < fileInfoCustom.total_chunks; i++) {
-        setState(prev => ({ ...prev, currentChunk: i + 1 }));
+      let completedChunks = existingChunks;
+      let totalBytesDownloaded = 0;
+      const startTime = performance.now();
+      
+      // Speed tracking interval
+      speedUpdateIntervalRef.current = setInterval(() => {
+        const elapsed = (performance.now() - startTime) / 1000;
+        const speed = (totalBytesDownloaded / (1024 * 1024)) / elapsed;
+        const progress = (completedChunks / totalChunks) * 100;
         
-        // Check if chunk already exists
-        const existingChunk = await chunkStorage.getChunk(cacheKey, i);
-        if (existingChunk) {
-          console.log(`⚡ Chunk ${i} already in IndexedDB, skipping download`);
-          continue;
+        setState(prev => ({
+          ...prev,
+          currentSpeed: speed,
+          downloadProgress: progress,
+          currentChunk: completedChunks,
+          storedChunks: completedChunks
+        }));
+      }, 100);
+      
+      if (state.parallelConnections > 1) {
+        // Parallel download for IndexedDB
+        const downloadAndStoreChunk = async (index: number): Promise<void> => {
+          // Check if chunk already exists
+          const existingChunk = await chunkStorage.getChunk(cacheKey, index);
+          if (existingChunk) {
+            console.log(`⚡ Chunk ${index} already in IndexedDB, skipping download`);
+            completedChunks++;
+            totalBytesDownloaded += existingChunk.length;
+            return;
+          }
+          
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${index}?chunk_size=${state.customChunkSize}`);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch chunk ${index}`);
+          }
+          
+          const chunkData = await response.json();
+          totalBytesDownloaded += chunkData.data.length;
+          
+          // Store in IndexedDB
+          await chunkStorage.storeChunk(cacheKey, index, chunkData.data);
+          completedChunks++;
+          console.log(`💾 Stored chunk ${index} to IndexedDB (${chunkData.data.length} chars)`);
+        };
+        
+        // Process chunks in parallel batches
+        const batchSize = state.parallelConnections;
+        for (let i = 0; i < totalChunks; i += batchSize) {
+          const batch = [];
+          for (let j = i; j < Math.min(i + batchSize, totalChunks); j++) {
+            batch.push(downloadAndStoreChunk(j));
+          }
+          await Promise.all(batch);
         }
         
-        const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}`);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch chunk ${i}`);
+      } else {
+        // Sequential download for IndexedDB
+        for (let i = 0; i < totalChunks; i++) {
+          // Check if chunk already exists
+          const existingChunk = await chunkStorage.getChunk(cacheKey, i);
+          if (existingChunk) {
+            console.log(`⚡ Chunk ${i} already in IndexedDB, skipping download`);
+            completedChunks++;
+            totalBytesDownloaded += existingChunk.length;
+            continue;
+          }
+          
+          const response = await fetch(`${API_BASE}/chunk/${fileInfo.file_id}/${i}?chunk_size=${state.customChunkSize}`);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch chunk ${i}`);
+          }
+          
+          const chunkData = await response.json();
+          totalBytesDownloaded += chunkData.data.length;
+          
+          // Store in IndexedDB
+          await chunkStorage.storeChunk(cacheKey, i, chunkData.data);
+          completedChunks++;
+          console.log(`💾 Stored chunk ${i} to IndexedDB (${chunkData.data.length} chars)`);
         }
-        
-        const chunkData = await response.json();
-        
-        // Store in IndexedDB with cache key including chunk size
-        await chunkStorage.storeChunk(cacheKey, i, chunkData.data);
-        console.log(`💾 Stored chunk ${i} to IndexedDB (${chunkData.data.length} chars)`);
-        
-        const updatedCount = await chunkStorage.getStoredChunkCount(cacheKey);
-        setState(prev => ({ ...prev, storedChunks: updatedCount }));
-        
-        // No delay needed - browsers can handle it!
+      }
+      
+      // Clear speed interval
+      if (speedUpdateIntervalRef.current) {
+        clearInterval(speedUpdateIntervalRef.current);
       }
       
       const downloadTime = performance.now() - downloadStartTimeRef.current;
+      const finalSpeed = (totalBytesDownloaded / (1024 * 1024)) / (downloadTime / 1000);
       const dbSize = await chunkStorage.getDatabaseSize();
       
       console.log(`✅ All chunks stored in IndexedDB! DB size: ${(dbSize / 1024 / 1024).toFixed(1)}MB`);
@@ -355,14 +419,22 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
       setState(prev => ({ 
         ...prev, 
         isDownloading: false,
+        downloadProgress: 100,
+        storedChunks: completedChunks,
         metrics: { 
           ...prev.metrics!,
           downloadTime,
-          chunksPerSecond: fileInfoCustom.total_chunks / (downloadTime / 1000)
+          downloadSpeed: finalSpeed,
+          totalDataTransferred: totalBytesDownloaded,
+          chunksPerSecond: totalChunks / (downloadTime / 1000),
+          parallelConnections: state.parallelConnections
         } as PerformanceMetrics
       }));
       
     } catch (err) {
+      if (speedUpdateIntervalRef.current) {
+        clearInterval(speedUpdateIntervalRef.current);
+      }
       setState(prev => ({ 
         ...prev, 
         isDownloading: false, 
@@ -702,12 +774,24 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
                 <div className="metric-value">{Math.ceil((fileInfo.b64_size * 4/3) / state.customChunkSize)}</div>
               </div>
               <div className="metric-item">
+                <div className="metric-label">Download Mode</div>
+                <div className="metric-value">{state.metrics.parallelConnections > 1 ? `${state.metrics.parallelConnections} parallel` : 'Sequential'}</div>
+              </div>
+              <div className="metric-item">
                 <div className="metric-label">Download Time</div>
                 <div className="metric-value">{(state.metrics.downloadTime / 1000).toFixed(2)}s</div>
               </div>
               <div className="metric-item">
+                <div className="metric-label">Download Speed</div>
+                <div className="metric-value" style={{ color: 'var(--success)', fontWeight: 'bold' }}>{state.metrics.downloadSpeed.toFixed(2)} MB/s</div>
+              </div>
+              <div className="metric-item">
                 <div className="metric-label">Decode Time</div>
                 <div className="metric-value">{(state.metrics.decodeTime / 1000).toFixed(2)}s</div>
+              </div>
+              <div className="metric-item">
+                <div className="metric-label">Decoding Speed</div>
+                <div className="metric-value">{state.metrics.decodingSpeed.toFixed(2)} MB/s</div>
               </div>
               <div className="metric-item">
                 <div className="metric-label">Total Time</div>
@@ -716,10 +800,6 @@ const ChunkedDecoder: React.FC<ChunkedDecoderProps> = ({ fileInfo, onReset }) =>
               <div className="metric-item">
                 <div className="metric-label">Chunks/Second</div>
                 <div className="metric-value">{state.metrics.chunksPerSecond.toFixed(1)}</div>
-              </div>
-              <div className="metric-item">
-                <div className="metric-label">Decoding Speed</div>
-                <div className="metric-value">{state.metrics.decodingSpeed.toFixed(2)} MB/s</div>
               </div>
               <div className="metric-item">
                 <div className="metric-label">Memory Usage</div>
